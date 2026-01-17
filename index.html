@@ -1,94 +1,162 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <link rel="manifest" href="manifest.json">
-    <title>Robot Twin 3.8 Stable</title>
+    <title>Robot Twin BLE 3.0</title>
     <style>
-        body { text-align: center; font-family: sans-serif; background: #f4f7f9; padding: 10px; margin: 0; }
-        .card { background: white; border-radius: 15px; padding: 15px; margin: 10px auto; max-width: 420px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); box-sizing: border-box; }
-        canvas { background: #fff; border-radius: 10px; border: 1px solid #ccc; display: block; margin: 0 auto; max-width: 100%; height: auto; }
-        .btn { background: #007AFF; color: white; border: none; padding: 12px; border-radius: 10px; width: 100%; cursor: pointer; margin-top: 10px; }
-        .btn:disabled { background: #ccc; cursor: not-allowed; }
-        .ble-btn { background: #5856D6; margin-bottom: 10px; }
-        #status { font-weight: bold; color: #007AFF; margin-top: 10px; font-size: 14px; min-height: 20px; }
-        .control-group { display: flex; gap: 10px; margin-top: 10px; }
+        :root { --primary: #007AFF; --bg: #f4f7f9; --card-bg: #ffffff; }
+        body { text-align: center; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); padding: 10px; margin: 0; color: #333; }
+        
+        /* 卡片容器 */
+        .card { 
+            background: var(--card-bg); border-radius: 20px; padding: 20px; margin: 10px auto; 
+            max-width: 420px; box-shadow: 0 8px 20px rgba(0,0,0,0.08); 
+        }
+
+        /* 标题栏 */
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        h2 { margin: 0; font-size: 1.2rem; }
+        .badge { font-size: 0.8rem; padding: 4px 8px; border-radius: 12px; background: #eee; color: #666; }
+        .badge.connected { background: #34C759; color: white; }
+
+        /* 画布区域 */
+        .canvas-container { position: relative; width: 100%; padding-top: 100%; /* 1:1 Aspect Ratio */ background: #f9f9f9; border-radius: 15px; border: 1px solid #eee; margin-bottom: 15px; overflow: hidden; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+
+        /* 按钮样式 */
+        .btn { 
+            background: var(--primary); color: white; border: none; padding: 14px; 
+            border-radius: 12px; width: 100%; font-size: 1rem; font-weight: 600;
+            cursor: pointer; margin-top: 10px; transition: opacity 0.2s;
+            display: flex; align-items: center; justify-content: center; gap: 8px;
+        }
+        .btn:active { opacity: 0.8; }
+        .btn:disabled { background: #e0e0e0; color: #999; cursor: not-allowed; }
+        .btn-stop { background: #FF3B30; }
+        .btn-outline { background: transparent; border: 2px solid var(--primary); color: var(--primary); }
+        .btn-group { display: flex; gap: 10px; margin-top: 10px; }
+
+        /* 状态显示 */
+        #status { margin-top: 15px; font-size: 0.9rem; color: #666; min-height: 20px; word-break: break-all;}
+        
+        /* 进度条 */
+        .progress-bar { height: 6px; background: #eee; border-radius: 3px; margin: 15px 0; overflow: hidden; display: none; }
+        .progress-fill { height: 100%; background: var(--primary); width: 0%; transition: width 0.3s; }
+        
+        /* 调试控制 */
+        .debug-panel { margin-top: 20px; padding-top: 15px; border-top: 1px dashed #eee; display: none; }
     </style>
 </head>
 <body>
+
     <div class="card">
-        <h2>🎨 ESP32 Robot 3.8</h2>
-        <button id="connectBtn" class="btn ble-btn" onclick="connectBLE()">📡 连接机器人 (Connect)</button>
-        <div id="status">Ready</div>
-        <hr>
-        <canvas id="preview" width="300" height="300"></canvas>
-        
-        <input type="file" id="fileInput" accept=".gcode,.txt,.nc" style="display:none" onchange="handleFile(this.files[0])">
-        <button class="btn" onclick="document.getElementById('fileInput').click()">📂 加载 G-Code 文件</button>
-        
-        <div class="control-group">
-            <button id="startBtn" class="btn" onclick="sendCommand('CMD:START')" disabled>▶ 开始绘画</button>
-            <button id="stopBtn" class="btn" style="background:#ff3b30" onclick="sendCommand('CMD:STOP')" disabled>⏸ 暂停</button>
+        <div class="header">
+            <h2>🎨 ESP32 Robot Twin</h2>
+            <span id="connectionBadge" class="badge">未连接</span>
         </div>
-        <div class="control-group">
-            <button class="btn" style="background:#ff9500" onclick="sendCommand('CMD:SERVO_FWD')">✏️ 落笔测试</button>
-            <button class="btn" style="background:#ff9500" onclick="sendCommand('CMD:SERVO_REV')">⬆️ 抬笔测试</button>
+
+        <div class="canvas-container">
+            <canvas id="preview"></canvas>
+        </div>
+
+        <div id="progressContainer" class="progress-bar">
+            <div id="progressFill" class="progress-fill"></div>
+        </div>
+
+        <div id="status">准备就绪，请连接设备</div>
+
+        <button id="connectBtn" class="btn" onclick="toggleConnection()">📡 连接蓝牙设备</button>
+        
+        <input type="file" id="fileInput" accept=".gcode,.txt,.nc" style="display:none" onchange="handleFileSelect(this.files[0])">
+        <button id="loadBtn" class="btn btn-outline" onclick="document.getElementById('fileInput').click()" disabled>📂 1. 加载 G-Code</button>
+        <button id="uploadBtn" class="btn" onclick="startUploadAndPrint()" disabled>▶️ 2. 上传并开始打印</button>
+
+        <div class="btn-group">
+            <button id="stopBtn" class="btn btn-stop" onclick="sendCommand('CMD:STOP')" disabled>⏸ 暂停</button>
+            <button class="btn btn-outline" onclick="toggleDebug()">🛠 调试</button>
+        </div>
+
+        <div id="debugPanel" class="debug-panel">
+            <div class="btn-group">
+                <button class="btn btn-outline" onclick="sendCommand('CMD:SERVO_FWD')">⬇ 落笔</button>
+                <button class="btn btn-outline" onclick="sendCommand('CMD:SERVO_REV')">⬆ 抬笔</button>
+            </div>
+            <div style="margin-top:10px; font-size:0.8rem; color:#999;">UUID: ...34fb</div>
         </div>
     </div>
 
     <script>
-        // UUID 必须全小写，与 main.c 中的定义一致
+        // --- 配置常量 ---
         const SERVICE_UUID = '000000ff-0000-1000-8000-00805f9b34fb';
         const CHAR_CMD_UUID = '000000ff-0000-1000-8000-00805f9b3401';
         const CHAR_STAT_UUID = '000000ff-0000-1000-8000-00805f9b3402';
-
+        
+        // --- 全局变量 ---
         let device, server, service, charCmd, charStat;
-        const statusDiv = document.getElementById('status');
-        const startBtn = document.getElementById('startBtn');
-        const stopBtn = document.getElementById('stopBtn');
-        const canvas = document.getElementById('preview');
-        const ctx = canvas.getContext('2d');
+        let gcodeContent = "";
+        let autoScale = 1.0;
+        let canvas, ctx;
+        let width, height;
+        let isConnected = false;
+        
+        // 数字孪生状态
+        let twinX = 0, twinY = 0;
 
-        // 绘图相关变量
-        let curX=0, curY=0, isPenDown=false, autoScale=1.0; 
-        let isM3=false; // 坐标系修正标志
-
+        // PWA Service Worker
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('service-worker.js');
+            navigator.serviceWorker.register('service-worker.js').catch(console.error);
+        }
+
+        window.onload = () => {
+            canvas = document.getElementById('preview');
+            ctx = canvas.getContext('2d');
+            // 适配高清屏
+            const dpr = window.devicePixelRatio || 1;
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+            ctx.scale(dpr, dpr);
+            width = rect.width;
+            height = rect.height;
+            resetCanvas();
+        };
+
+        // --- 蓝牙连接逻辑 ---
+        async function toggleConnection() {
+            if (isConnected) {
+                disconnectBLE();
+            } else {
+                connectBLE();
+            }
         }
 
         async function connectBLE() {
+            updateStatus("正在搜索设备...", "blue");
             try {
-                statusDiv.innerText = "正在搜索设备...";
-                
-                // [关键修改] 使用 services 过滤，而不是 name
-                // 这样能确保在广播包只包含 UUID 的情况下也能被发现
+                // [关键修复] 使用 services 过滤，解决扫描响应包名字丢失导致的不可见问题
                 device = await navigator.bluetooth.requestDevice({
                     filters: [{ services: [SERVICE_UUID] }],
                     optionalServices: [SERVICE_UUID]
                 });
 
                 device.addEventListener('gattserverdisconnected', onDisconnected);
+                updateStatus("正在连接 GATT...", "blue");
                 
-                statusDiv.innerText = "正在连接...";
                 server = await device.gatt.connect();
                 service = await server.getPrimaryService(SERVICE_UUID);
-                
                 charCmd = await service.getCharacteristic(CHAR_CMD_UUID);
                 charStat = await service.getCharacteristic(CHAR_STAT_UUID);
 
+                // 开启通知
                 await charStat.startNotifications();
                 charStat.addEventListener('characteristicvaluechanged', handleStatusUpdate);
 
-                statusDiv.innerText = "✅ 已连接: " + device.name;
-                document.getElementById('connectBtn').innerText = "已连接 (点击断开)";
-                document.getElementById('connectBtn').onclick = disconnectBLE;
-                
+                onConnected();
             } catch (error) {
                 console.error(error);
-                // [新增] 将错误直接显示在界面上，方便手机调试
-                statusDiv.innerText = "连接失败: " + error.message;
+                updateStatus("连接失败: " + error.message, "red");
             }
         }
 
@@ -98,111 +166,237 @@
             }
         }
 
+        function onConnected() {
+            isConnected = true;
+            document.getElementById('connectionBadge').innerText = "已连接";
+            document.getElementById('connectionBadge').classList.add("connected");
+            document.getElementById('connectBtn').innerText = "❌ 断开连接";
+            document.getElementById('connectBtn').classList.add("btn-outline");
+            document.getElementById('loadBtn').disabled = false;
+            if (gcodeContent) document.getElementById('uploadBtn').disabled = false;
+            updateStatus("设备已就绪", "green");
+            
+            // 每次连接重置数字孪生位置
+            twinX = 0; twinY = 0;
+        }
+
         function onDisconnected() {
-            statusDiv.innerText = "❌ 设备已断开";
-            document.getElementById('connectBtn').innerText = "📡 连接机器人";
-            document.getElementById('connectBtn').onclick = connectBLE;
-            startBtn.disabled = true;
-            stopBtn.disabled = true;
+            isConnected = false;
+            document.getElementById('connectionBadge').innerText = "未连接";
+            document.getElementById('connectionBadge').classList.remove("connected");
+            document.getElementById('connectBtn').innerText = "📡 连接蓝牙设备";
+            document.getElementById('connectBtn').classList.remove("btn-outline");
+            document.getElementById('loadBtn').disabled = true;
+            document.getElementById('uploadBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = true;
+            updateStatus("设备已断开", "orange");
+        }
+
+        // --- G-Code 处理与上传 ---
+        async function handleFileSelect(file) {
+            if (!file) return;
+            const text = await file.text();
+            gcodeContent = text;
+            
+            // 1. 计算缩放并绘制预览 (灰色背景轨迹)
+            calculateScale(text);
+            resetCanvas();
+            drawPreview(text, '#e0e0e0'); // 预览色
+            
+            document.getElementById('uploadBtn').disabled = !isConnected;
+            updateStatus(`已加载: ${file.name} (${(file.size/1024).toFixed(1)}KB)`, "black");
+        }
+
+        async function startUploadAndPrint() {
+            if (!gcodeContent) return;
+            if (!charCmd) return;
+
+            document.getElementById('uploadBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+            document.getElementById('progressContainer').style.display = 'block';
+            
+            try {
+                // 1. 发送新文件指令
+                updateStatus("正在重置文件...", "blue");
+                await sendCommand("CMD:NEWFILE");
+
+                // 2. 分片发送
+                const lines = gcodeContent.split('\n');
+                const total = lines.length;
+                let buffer = "";
+                const CHUNK_SIZE = 400; // 聚合多个短行，减少BLE包头开销
+
+                for (let i = 0; i < total; i++) {
+                    const line = lines[i].trim();
+                    if (line.length === 0 || line.startsWith(';')) continue;
+                    
+                    // 简单流控
+                    await sendCommand(line + "\n");
+                    
+                    // 更新UI
+                    if (i % 20 === 0) {
+                        const pct = Math.round((i / total) * 100);
+                        document.getElementById('progressFill').style.width = pct + "%";
+                        updateStatus(`上传中... ${pct}%`, "blue");
+                        await new Promise(r => setTimeout(r, 10)); // 给UI喘息时间
+                    }
+                }
+                
+                updateStatus("上传完成，发送启动指令...", "blue");
+                await sendCommand("CMD:START");
+                
+            } catch (e) {
+                updateStatus("上传中断: " + e.message, "red");
+                document.getElementById('uploadBtn').disabled = false;
+            }
         }
 
         async function sendCommand(cmd) {
             if (!charCmd) return;
-            try {
-                const encoder = new TextEncoder();
-                await charCmd.writeValue(encoder.encode(cmd));
-                console.log("Sent:", cmd);
-            } catch (e) {
-                statusDiv.innerText = "发送失败: " + e.message;
-            }
+            const encoder = new TextEncoder();
+            // 写入并不等待响应，提高速度 (Write Without Response)
+            // 注意：如果 ESP32 端处理不过来，可能需要加短暂延时
+            await charCmd.writeValue(encoder.encode(cmd));
         }
 
+        // --- 数字孪生：状态反馈与实时绘图 ---
         function handleStatusUpdate(event) {
             const value = event.target.value;
             const decoder = new TextDecoder();
             const jsonStr = decoder.decode(value);
+            
             try {
-                // 简单解析 JSON: {"s":1,"p":50,"c":"G1 X10 Y10"}
+                // 协议: {"s":status, "p":progress, "c":"G1 X10 Y20"}
                 const data = JSON.parse(jsonStr);
-                let stateText = ["空闲", "绘画中", "暂停", "完成"][data.s] || "未知";
-                statusDiv.innerText = `状态: ${stateText} | 进度: ${data.p}%`;
+                
+                // 1. 更新进度文字
+                if (data.s === 1) { // Running
+                    updateStatus(`正在绘制: ${data.p}%`, "green");
+                    document.getElementById('progressFill').style.width = data.p + "%";
+                } else if (data.s === 3) { // Finished
+                    updateStatus("绘制完成! 🎉", "green");
+                    document.getElementById('uploadBtn').disabled = false;
+                }
+
+                // 2. 数字孪生 (核心功能)
+                // 解析 ESP32 当前执行的指令，并在 Canvas 上绘制实线
+                if (data.c) {
+                    drawTwinPath(data.c);
+                }
+
             } catch (e) {
-                console.log("Parse Error", jsonStr);
+                console.warn("JSON Parse Error:", jsonStr);
             }
         }
 
-        async function handleFile(file) {
-            if (!file) return;
-            statusDiv.innerText = "正在解析 G-Code...";
-            const text = await file.text();
+        // --- 绘图逻辑 ---
+        function resetCanvas() {
+            ctx.clearRect(0, 0, width, height);
+            ctx.lineCap = "round";
+            ctx.lineJoin = "round";
+        }
+
+        function calculateScale(text) {
+            let maxX = 0, maxY = 0;
+            text.split('\n').forEach(line => {
+                const x = line.match(/X([\d.]+)/);
+                const y = line.match(/Y([\d.]+)/);
+                if (x) maxX = Math.max(maxX, parseFloat(x[1]));
+                if (y) maxY = Math.max(maxY, parseFloat(y[1]));
+            });
+            // 留白 20px
+            const padding = 20;
+            const availW = width - padding * 2;
+            const availH = height - padding * 2;
             
-            // 1. 本地预览
-            ctx.clearRect(0,0,300,300);
-            calculateScale(text);
+            if (maxX > 0 && maxY > 0) {
+                const scaleX = availW / maxX;
+                const scaleY = availH / maxY;
+                autoScale = Math.min(scaleX, scaleY);
+            } else {
+                autoScale = 1.0;
+            }
+        }
+
+        // 绘制静态预览 (灰色)
+        function drawPreview(text, color) {
             ctx.beginPath();
-            curX=0; curY=0; isPenDown=false;
-            text.split('\n').forEach(line => parseAndDraw(line));
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1;
             
-            // 2. 发送文件到 ESP32 (分片发送)
-            if (charCmd) {
-                statusDiv.innerText = "正在上传文件...";
-                await sendCommand("CMD:NEWFILE");
-                const lines = text.split('\n');
-                for (let i = 0; i < lines.length; i++) {
-                    const line = lines[i].trim();
-                    if (line.length > 0) {
-                        await sendCommand(line + "\n");
-                        // 简单流控：每发几行暂停一下，防止阻塞
-                        if (i % 10 === 0) await new Promise(r => setTimeout(r, 20)); 
-                        statusDiv.innerText = `上传中: ${Math.round(i/lines.length*100)}%`;
+            let curX = 0, curY = 0;
+            let isDown = false;
+
+            text.split('\n').forEach(line => {
+                // 解析 M3/M5 (假设 M3=落笔, M5=抬笔)
+                if (line.includes('M3')) isDown = true;
+                if (line.includes('M5')) isDown = false;
+                
+                // 解析坐标
+                const xMatch = line.match(/X([\d.]+)/);
+                const yMatch = line.match(/Y([\d.]+)/);
+                
+                if (xMatch) curX = parseFloat(xMatch[1]) * autoScale;
+                if (yMatch) curY = parseFloat(yMatch[1]) * autoScale;
+
+                // 坐标变换 (增加边距 + 翻转Y轴适配 Canvas)
+                const drawX = curX + 10;
+                const drawY = height - (curY + 10); // 假设原点在左下角
+
+                if (line.includes('G0') || line.includes('G1')) {
+                    if (isDown) {
+                        ctx.lineTo(drawX, drawY);
+                    } else {
+                        ctx.moveTo(drawX, drawY);
                     }
                 }
-                statusDiv.innerText = "文件上传完成，请点击开始";
-                startBtn.disabled = false;
-                stopBtn.disabled = false;
-            } else {
-                statusDiv.innerText = "预览完成 (未连接设备)";
-            }
-        }
-
-        // --- 简单的 G-Code 预览逻辑 ---
-        function calculateScale(content) {
-            let mX=0, mY=0; 
-            isM3 = content.includes('M3'); // 判断是否为激光/舵机模式
-            content.split('\n').forEach(l=>{
-                const x=l.match(/X([\d.]+)/), y=l.match(/Y([\d.]+)/);
-                if(x) mX=Math.max(mX,parseFloat(x[1])); 
-                if(y) mY=Math.max(mY,parseFloat(y[1]));
             });
-            // 自动缩放以适应 300x300 画布
-            autoScale = Math.max(mX,mY) > 0 ? (280/Math.max(mX,mY)) : 1.0;
+            ctx.stroke();
         }
 
-        function parseAndDraw(cmd) {
-            let nX=curX, nY=curY;
-            // 简单模拟 M3/M5 落笔抬笔
-            if(cmd.includes('M3')) isPenDown=true; 
-            if(cmd.includes('M5')) isPenDown=false;
-            
-            const x=cmd.match(/X([\d.]+)/), y=cmd.match(/Y([\d.]+)/), z=cmd.match(/Z([\d.]+)/);
-            
-            if(x) nX=parseFloat(x[1]) * autoScale; 
-            if(y) nY=parseFloat(y[1]) * autoScale;
-            if(z) isPenDown=(parseFloat(z[1]) <= 0); // 假设 Z<=0 是落笔
+        // 绘制实时孪生路径 (蓝色)
+        function drawTwinPath(cmd) {
+            // cmd 类似于 "G1 X10.5 Y20.0"
+            if (!cmd.includes('G1') && !cmd.includes('G0')) return;
 
-            if(cmd.includes('G0') || cmd.includes('G1')){
-                // 坐标转换：加点边距
-                let drawX = nX + 10;
-                let drawY = isM3 ? (290 - nY) : (nY + 10); // 镜像Y轴如果需要
+            const xMatch = cmd.match(/X([\d.]+)/);
+            const yMatch = cmd.match(/Y([\d.]+)/);
+            
+            if (!xMatch && !yMatch) return; // 没有坐标变动
 
-                if(isPenDown){ 
-                    ctx.lineTo(drawX, drawY); 
-                    ctx.stroke(); 
-                } else { 
-                    ctx.moveTo(drawX, drawY); 
-                }
-                curX=nX; curY=nY;
-            }
+            let newX = twinX;
+            let newY = twinY;
+            
+            if (xMatch) newX = parseFloat(xMatch[1]) * autoScale;
+            if (yMatch) newY = parseFloat(yMatch[1]) * autoScale;
+
+            const startX = twinX + 10;
+            const startY = height - (twinY + 10);
+            const endX = newX + 10;
+            const endY = height - (newY + 10);
+
+            ctx.beginPath();
+            ctx.strokeStyle = '#007AFF'; // 孪生高亮色
+            ctx.lineWidth = 2;
+            ctx.moveTo(startX, startY);
+            ctx.lineTo(endX, endY);
+            ctx.stroke();
+
+            // 更新当前孪生坐标
+            twinX = newX;
+            twinY = newY;
+        }
+
+        // --- 工具函数 ---
+        function updateStatus(msg, color="black") {
+            const el = document.getElementById('status');
+            el.innerText = msg;
+            el.style.color = color;
+        }
+
+        function toggleDebug() {
+            const panel = document.getElementById('debugPanel');
+            panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
         }
     </script>
 </body>
