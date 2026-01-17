@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="manifest" href="manifest.json">
-    <title>Robot Twin 3.3 PWA</title>
+    <title>Robot Twin 3.4 Stable</title>
     <style>
         body { text-align: center; font-family: sans-serif; background: #f4f7f9; padding: 10px; margin: 0; }
         .card { background: white; border-radius: 15px; padding: 15px; margin: 10px auto; max-width: 420px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); box-sizing: border-box; }
@@ -19,7 +19,7 @@
 </head>
 <body>
     <div class="card">
-        <h2>Digital Twin 3.3 (Bluetooth)</h2>
+        <h2>Digital Twin 3.4 (Bluefy)</h2>
         <button class="btn ble-btn" id="btBtn" onclick="connectBLE()">📡 连接机器人 (Connect BLE)</button>
         <canvas id="twinCanvas" width="400" height="400"></canvas>
         <p id="status">未连接 / Disconnected</p>
@@ -41,23 +41,23 @@
 
     <script>
         // PWA 注册
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('service-worker.js');
-        }
+        if ('serviceWorker' in navigator) { navigator.serviceWorker.register('service-worker.js'); }
 
-        // BLE 配置
-        const SVC_UUID = 0x00FF;
-        const CHAR_CMD = 0xFF01; 
-        const CHAR_STAT = 0xFF02; 
+        // --- 128位 标准 UUID ---
+        const SVC_UUID = "000000ff-0000-1000-8000-00805f9b34fb";
+        const CHAR_CMD = "0000ff01-0000-1000-8000-00805f9b34fb";
+        const CHAR_STAT = "0000ff02-0000-1000-8000-00805f9b34fb";
 
         let device, server, service, cmdChar;
         let isConnected = false;
 
         async function connectBLE() {
+            if (!navigator.bluetooth) return alert("当前浏览器不支持蓝牙。\niOS请使用 'Bluefy'。\nAndroid请使用 Chrome。");
+            
             try {
-                document.getElementById('status').innerText = "搜索中...";
+                document.getElementById('status').innerText = "搜索设备中...";
                 device = await navigator.bluetooth.requestDevice({
-                    filters: [{ name: 'ESP32-Robot-3.3' }],
+                    filters: [{ name: 'ESP32-Robot-3.4' }],
                     optionalServices: [SVC_UUID]
                 });
                 
@@ -71,11 +71,18 @@
 
                 isConnected = true;
                 document.getElementById('status').innerText = "蓝牙已连接!";
-                document.getElementById('btBtn').innerText = "✅ 蓝牙已连接";
+                document.getElementById('btBtn').innerText = "✅ 蓝牙已连接 (Ready)";
                 document.getElementById('btBtn').style.background = "#34c759";
                 
             } catch (error) {
-                alert("连接失败: " + error);
+                console.error(error);
+                let msg = "连接失败";
+                if (error.name === 'NotFoundError') msg = "未找到设备 (请确保ESP32已通电)";
+                else if (error.name === 'SecurityError') msg = "安全错误 (请使用HTTPS)";
+                else msg = error.toString();
+                
+                document.getElementById('status').innerText = msg;
+                alert("连接失败:\n" + msg + "\n\n请确保 ESP32 已烧录基线3.4并通电。");
             }
         }
 
@@ -133,7 +140,6 @@
             reader.readAsText(file);
         }
 
-        // --- 画布逻辑 ---
         const cv = document.getElementById('twinCanvas'), ctx = cv.getContext('2d');
         let curX=0, curY=0, isPenDown=false, autoScale=1.0, isM3=false;
 
