@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="manifest" href="manifest.json">
+    <title>Robot Twin 3.3 PWA</title>
+    <style>
+        body { text-align: center; font-family: sans-serif; background: #f4f7f9; padding: 10px; margin: 0; }
+        .card { background: white; border-radius: 15px; padding: 15px; margin: 10px auto; max-width: 420px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); box-sizing: border-box; }
+        canvas { background: #fff; border-radius: 10px; border: 1px solid #ccc; display: block; margin: 0 auto; max-width: 100%; height: auto; }
+        .btn { background: #007AFF; color: white; border: none; padding: 12px; border-radius: 10px; width: 100%; cursor: pointer; margin-top: 10px; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+        .ble-btn { background: #5856D6; margin-bottom: 10px; }
+        #status { font-weight: bold; color: #007AFF; margin-top: 10px; font-size: 0.9rem; }
+        .servo-debug-group { display: flex; gap: 10px; margin-top: 10px; }
+        .btn-servo { background: #5856D6; flex: 1; font-size: 0.85rem; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>Digital Twin 3.3 (Bluetooth)</h2>
+        <button class="btn ble-btn" id="btBtn" onclick="connectBLE()">📡 连接机器人 (Connect BLE)</button>
+        <canvas id="twinCanvas" width="400" height="400"></canvas>
+        <p id="status">未连接 / Disconnected</p>
+    </div>
+
+    <div class="card">
+        <h2>Control Panel</h2>
+        <input type="file" id="gf" accept=".gcode" style="display:none" onchange="chkFile()">
+        <button class="btn" id="selBtn" onclick="document.getElementById('gf').click()">Select G-Code</button>
+        <button class="btn" id="upBtn" style="background:#34c759; display:none" onclick="uploadViaBLE()">Upload via Bluetooth</button>
+        <button class="btn" id="startBtn" style="background:#ff9500; display:none" onclick="sendCmd('CMD:START')">Start Drawing</button>
+        <button class="btn" onclick="sendCmd('CMD:STOP')" style="background:#ff4757; margin-top:10px">Pause Drawing</button>
+        
+        <div class="servo-debug-group">
+            <button class="btn btn-servo" onclick="sendCmd('CMD:SERVO_FWD')">舵机正向</button>
+            <button class="btn btn-servo" onclick="sendCmd('CMD:SERVO_REV')">舵机反向</button>
+        </div>
+    </div>
+
+    <script>
+        // PWA 注册
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('service-worker.js');
+        }
+
+        // BLE 配置
+        const SVC_UUID = 0x00FF;
+        const CHAR_CMD = 0xFF01; 
+        const CHAR_STAT = 0xFF02; 
+
+        let device, server, service, cmdChar;
+        let isConnected = false;
+
+        async function connectBLE() {
+            try {
+                document.getElementById('status').innerText = "搜索中...";
+                device = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: 'ESP32-Robot-3.3' }],
+                    optionalServices: [SVC_UUID]
+                });
+                
+                server = await device.gatt.connect();
+                service = await server.getPrimaryService(SVC_UUID);
+                cmdChar = await service.getCharacteristic(CHAR_CMD);
+                const statChar = await service.getCharacteristic(CHAR_STAT);
+
+                await statChar.startNotifications();
+                statChar.addEventListener('characteristicvaluechanged', handleStatusUpdate);
+
+                isConnected = true;
+                document.getElementById('status').innerText = "蓝牙已连接!";
+                document.getElementById('btBtn').innerText = "✅ 蓝牙已连接";
+                document.getElementById('btBtn').style.background = "#34c759";
+                
+            } catch (error) {
+                alert("连接失败: " + error);
+            }
+        }
+
+        function handleStatusUpdate(event) {
+            const dec = new TextDecoder();
+            try {
+                const d = JSON.parse(dec.decode(event.target.value));
+                const btn = document.getElementById('startBtn');
+                const statText = document.getElementById('status');
+                
+                if (d.s === 1) {
+                    btn.innerText = "Stop Drawing Now"; btn.style.background = "#ff4757";
+                    statText.innerText = `Drawing... ${d.p}%`;
+                } else if (d.s === 2) {
+                    btn.innerText = "Start Drawing Now"; btn.style.background = "#ff9500";
+                    statText.innerText = `Paused ${d.p}%`;
+                } else if (d.s === 3) {
+                    btn.innerText = "Start Drawing Now"; btn.style.background = "#34c759";
+                    statText.innerText = "Finished 100%";
+                }
+                if (d.c) parseAndDraw(d.c);
+            } catch(e) {}
+        }
+
+        async function sendCmd(cmd) {
+            if (!isConnected) return alert("请先连接蓝牙!");
+            await cmdChar.writeValue(new TextEncoder().encode(cmd));
+        }
+
+        async function uploadViaBLE() {
+            const file = document.getElementById('gf').files[0];
+            if (!file || !isConnected) return;
+
+            document.getElementById('status').innerText = "初始化上传...";
+            await sendCmd("CMD:NEWFILE"); 
+
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                const data = new TextEncoder().encode(e.target.result);
+                const CHUNK = 500;
+                let offset = 0;
+                
+                document.getElementById('upBtn').disabled = true;
+                while (offset < data.length) {
+                    await cmdChar.writeValue(data.slice(offset, offset + CHUNK));
+                    offset += CHUNK;
+                    document.getElementById('status').innerText = `上传中: ${Math.floor((offset / data.length) * 100)}%`;
+                }
+                
+                document.getElementById('status').innerText = "上传完成!";
+                document.getElementById('startBtn').style.display = "block";
+                document.getElementById('upBtn').disabled = false;
+                initCanvas();
+            };
+            reader.readAsText(file);
+        }
+
+        // --- 画布逻辑 ---
+        const cv = document.getElementById('twinCanvas'), ctx = cv.getContext('2d');
+        let curX=0, curY=0, isPenDown=false, autoScale=1.0, isM3=false;
+
+        function initCanvas() { ctx.clearRect(0,0,400,400); ctx.beginPath(); curX=0; curY=0; }
+        
+        function calculateBestScale(content) {
+            let mX=0, mY=0; isM3=content.includes('M3');
+            content.split('\n').forEach(l=>{
+                const x=l.match(/X([\d.]+)/), y=l.match(/Y([\d.]+)/);
+                if(x) mX=Math.max(mX,parseFloat(x[1])); if(y) mY=Math.max(mY,parseFloat(y[1]));
+            });
+            autoScale = Math.max(mX,mY)>0 ? (360/Math.max(mX,mY)) : 4.0;
+        }
+
+        function parseAndDraw(cmd) {
+            let nX=curX, nY=curY;
+            if(cmd.includes('M3')) isPenDown=true; if(cmd.includes('M5')) isPenDown=false;
+            const x=cmd.match(/X([\d.]+)/), y=cmd.match(/Y([\d.]+)/), z=cmd.match(/Z([\d.]+)/);
+            if(x) nX=parseFloat(x[1])*autoScale; if(y) nY=parseFloat(y[1])*autoScale;
+            if(z) isPenDown=(parseFloat(z[1])<=0);
+
+            if(cmd.includes('G0')||cmd.includes('G1')){
+                let dY = isM3 ? (400-(nY+20)) : (nY+20);
+                if(isPenDown){ ctx.lineTo(nX+20,dY); ctx.stroke(); } else { ctx.moveTo(nX+20,dY); }
+                curX=nX; curY=nY;
+            }
+        }
+
+        function chkFile() {
+            const f = document.getElementById('gf').files[0];
+            if (f) {
+                const reader = new FileReader();
+                reader.onload = (e) => calculateBestScale(e.target.result);
+                reader.readAsText(f);
+                document.getElementById('upBtn').style.display = "block";
+            }
+        }
+        
+        window.onload = initCanvas;
+    </script>
+</body>
+</html>

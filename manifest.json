@@ -1,0 +1,9 @@
+{
+    "name": "Drawing Robot 3.3",
+    "short_name": "Robot3.3",
+    "start_url": "./index.html",
+    "display": "standalone",
+    "background_color": "#ffffff",
+    "theme_color": "#007AFF",
+    "icons": []
+  }
