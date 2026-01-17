@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <link rel="manifest" href="manifest.json">
-    <title>Robot Twin BLE 3.2 (Sync Fix)</title>
+    <title>Robot Twin BLE 3.3 (iOS Fix)</title>
     <style>
         :root { --primary: #007AFF; --bg: #f4f7f9; --card-bg: #ffffff; }
         body { text-align: center; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); padding: 10px; margin: 0; color: #333; }
@@ -62,7 +62,8 @@
 
         <button id="connectBtn" class="btn" onclick="toggleConnection()">📡 连接蓝牙设备</button>
         
-        <input type="file" id="fileInput" accept=".gcode,.txt,.nc" style="display:none" onchange="handleFileSelect(this.files[0])">
+        <input type="file" id="fileInput" accept=".gcode,.txt,.nc,.py,text/*,*/*" style="display:none" onchange="handleFileSelect(this.files[0])">
+        
         <button id="loadBtn" class="btn btn-outline" onclick="document.getElementById('fileInput').click()" disabled>📂 1. 加载 G-Code</button>
         <button id="uploadBtn" class="btn" onclick="startUploadAndPrint()" disabled>▶️ 2. 上传并开始打印</button>
 
@@ -92,8 +93,8 @@
         let isConnected = false;
         
         // --- 核心优化变量 ---
-        let allParsedLines = []; // 存储所有预解析的坐标点
-        let lastDrawnIndex = 0;  // 上一次画到的行号
+        let allParsedLines = [];
+        let lastDrawnIndex = 0;
         
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('service-worker.js').catch(console.error);
@@ -131,8 +132,12 @@
                 server = await device.gatt.connect();
                 service = await server.getPrimaryService(SERVICE_UUID);
                 
-                charCmd = await service.getCharacteristic(CHAR_CMD_UUID);
-                charStat = await service.getCharacteristic(CHAR_STAT_UUID);
+                try {
+                    charCmd = await service.getCharacteristic(CHAR_CMD_UUID);
+                    charStat = await service.getCharacteristic(CHAR_STAT_UUID);
+                } catch (e) {
+                    throw new Error("UUID 不匹配，请检查固件版本。");
+                }
 
                 await charStat.startNotifications();
                 charStat.addEventListener('characteristicvaluechanged', handleStatusUpdate);
@@ -156,9 +161,12 @@
             document.getElementById('connectionBadge').classList.add("connected");
             document.getElementById('connectBtn').innerText = "❌ 断开连接";
             document.getElementById('connectBtn').classList.add("btn-outline");
+            
             document.getElementById('loadBtn').disabled = false;
             if (gcodeContent) document.getElementById('uploadBtn').disabled = false;
+            
             updateStatus("设备已就绪", "green");
+            twinX = 0; twinY = 0;
         }
 
         function onDisconnected() {
@@ -178,13 +186,12 @@
             const text = await file.text();
             gcodeContent = text;
             
-            // 预处理所有线条
             calculateScale(text);
-            parseAllLines(text); // 解析存入内存
+            parseAllLines(text);
             
             resetCanvas();
             drawPreview(text, '#e0e0e0');
-            lastDrawnIndex = 0; // 重置绘制进度
+            lastDrawnIndex = 0;
             
             document.getElementById('uploadBtn').disabled = !isConnected;
             updateStatus(`已加载: ${file.name} (${(file.size/1024).toFixed(1)}KB)`, "black");
@@ -196,7 +203,7 @@
             document.getElementById('uploadBtn').disabled = true;
             document.getElementById('stopBtn').disabled = false;
             document.getElementById('progressContainer').style.display = 'block';
-            lastDrawnIndex = 0; // 打印开始，重置进度
+            lastDrawnIndex = 0;
             
             try {
                 updateStatus("正在初始化...", "blue");
@@ -234,7 +241,6 @@
             await charCmd.writeValue(encoder.encode(cmd));
         }
 
-        // --- 核心修复：基于 Index 的同步绘图 ---
         function handleStatusUpdate(event) {
             const value = event.target.value;
             const decoder = new TextDecoder();
@@ -242,20 +248,17 @@
             
             try {
                 const data = JSON.parse(jsonStr);
-                // 协议: {"s":status, "i":current_line_index}
                 
-                if (data.s === 1) { // Running
-                    // 计算总进度百分比 (避免依赖ESP32的p值)
+                if (data.s === 1) { 
                     const total = allParsedLines.length;
                     const pct = total > 0 ? Math.round((data.i / total) * 100) : 0;
                     updateStatus(`正在绘制: ${pct}% (行 ${data.i})`, "green");
                     document.getElementById('progressFill').style.width = pct + "%";
-                } else if (data.s === 3) { // Finished
+                } else if (data.s === 3) { 
                     updateStatus("绘制完成! 🎉", "green");
                     document.getElementById('uploadBtn').disabled = false;
                 }
 
-                // 补画逻辑：从上次画到的地方，画到当前报告的地方
                 if (data.i > lastDrawnIndex) {
                     drawSegment(lastDrawnIndex, data.i);
                     lastDrawnIndex = data.i;
@@ -266,9 +269,6 @@
             }
         }
 
-        // --- 绘图逻辑 ---
-        
-        // 预解析所有坐标点，避免每次重算
         function parseAllLines(text) {
             allParsedLines = [];
             let curX = 0, curY = 0;
@@ -284,7 +284,6 @@
                 if (xMatch) curX = parseFloat(xMatch[1]) * autoScale;
                 if (yMatch) curY = parseFloat(yMatch[1]) * autoScale;
                 
-                // 存入结构化数据
                 allParsedLines.push({
                     x: curX,
                     y: curY,
@@ -294,15 +293,13 @@
             });
         }
 
-        // 补画函数：画出 startIdx 到 endIdx 之间的所有线段
         function drawSegment(startIdx, endIdx) {
             if (endIdx >= allParsedLines.length) endIdx = allParsedLines.length - 1;
             
             ctx.beginPath();
-            ctx.strokeStyle = '#007AFF'; // 孪生高亮色
+            ctx.strokeStyle = '#007AFF'; 
             ctx.lineWidth = 2;
             
-            // 找到起点
             let startPoint = allParsedLines[startIdx];
             if(!startPoint) return;
             
@@ -316,7 +313,6 @@
                     const drawX = p.x + 10;
                     const drawY = height - (p.y + 10);
                     
-                    // 只有落笔时才画线，否则只是移动
                     if (p.isDown) {
                         ctx.lineTo(drawX, drawY);
                     } else {
