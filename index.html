@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <link rel="manifest" href="manifest.json">
-    <title>Robot Twin BLE 3.1 (Fixed)</title>
+    <title>Robot Twin BLE 3.2 (Sync Fix)</title>
     <style>
         :root { --primary: #007AFF; --bg: #f4f7f9; --card-bg: #ffffff; }
         body { text-align: center; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); padding: 10px; margin: 0; color: #333; }
@@ -81,19 +81,20 @@
     </div>
 
     <script>
-        // --- 修复点：UUID 必须与 main.c 中的定义完全一致 ---
-        // C代码中: uuid128[12] = 0x01，对应 UUID 字符串的前部
         const SERVICE_UUID   = '000000ff-0000-1000-8000-00805f9b34fb';
-        const CHAR_CMD_UUID  = '0000ff01-0000-1000-8000-00805f9b34fb'; // 修复：之前是 ...3401
-        const CHAR_STAT_UUID = '0000ff02-0000-1000-8000-00805f9b34fb'; // 修复：之前是 ...3402
+        const CHAR_CMD_UUID  = '0000ff01-0000-1000-8000-00805f9b34fb';
+        const CHAR_STAT_UUID = '0000ff02-0000-1000-8000-00805f9b34fb';
         
         let device, server, service, charCmd, charStat;
         let gcodeContent = "";
         let autoScale = 1.0;
         let canvas, ctx, width, height;
         let isConnected = false;
-        let twinX = 0, twinY = 0;
-
+        
+        // --- 核心优化变量 ---
+        let allParsedLines = []; // 存储所有预解析的坐标点
+        let lastDrawnIndex = 0;  // 上一次画到的行号
+        
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('service-worker.js').catch(console.error);
         }
@@ -130,21 +131,15 @@
                 server = await device.gatt.connect();
                 service = await server.getPrimaryService(SERVICE_UUID);
                 
-                // 获取特征值 (这里如果 UUID 不对会报错)
-                try {
-                    charCmd = await service.getCharacteristic(CHAR_CMD_UUID);
-                    charStat = await service.getCharacteristic(CHAR_STAT_UUID);
-                } catch (e) {
-                    throw new Error("UUID 不匹配，请检查固件版本。");
-                }
+                charCmd = await service.getCharacteristic(CHAR_CMD_UUID);
+                charStat = await service.getCharacteristic(CHAR_STAT_UUID);
 
                 await charStat.startNotifications();
                 charStat.addEventListener('characteristicvaluechanged', handleStatusUpdate);
 
-                onConnected(); // 连接成功，激活界面
+                onConnected();
             } catch (error) {
                 console.error(error);
-                // 修复：防止显示 undefined
                 let msg = error.message || error.toString();
                 if (msg.includes("User cancelled")) msg = "用户取消操作";
                 updateStatus("未连接：" + msg, "red");
@@ -161,13 +156,9 @@
             document.getElementById('connectionBadge').classList.add("connected");
             document.getElementById('connectBtn').innerText = "❌ 断开连接";
             document.getElementById('connectBtn').classList.add("btn-outline");
-            
-            // 激活加载按钮
             document.getElementById('loadBtn').disabled = false;
             if (gcodeContent) document.getElementById('uploadBtn').disabled = false;
-            
             updateStatus("设备已就绪", "green");
-            twinX = 0; twinY = 0;
         }
 
         function onDisconnected() {
@@ -186,11 +177,15 @@
             if (!file) return;
             const text = await file.text();
             gcodeContent = text;
+            
+            // 预处理所有线条
             calculateScale(text);
+            parseAllLines(text); // 解析存入内存
+            
             resetCanvas();
             drawPreview(text, '#e0e0e0');
+            lastDrawnIndex = 0; // 重置绘制进度
             
-            // 只有连接状态下才允许上传
             document.getElementById('uploadBtn').disabled = !isConnected;
             updateStatus(`已加载: ${file.name} (${(file.size/1024).toFixed(1)}KB)`, "black");
         }
@@ -201,6 +196,7 @@
             document.getElementById('uploadBtn').disabled = true;
             document.getElementById('stopBtn').disabled = false;
             document.getElementById('progressContainer').style.display = 'block';
+            lastDrawnIndex = 0; // 打印开始，重置进度
             
             try {
                 updateStatus("正在初始化...", "blue");
@@ -238,6 +234,7 @@
             await charCmd.writeValue(encoder.encode(cmd));
         }
 
+        // --- 核心修复：基于 Index 的同步绘图 ---
         function handleStatusUpdate(event) {
             const value = event.target.value;
             const decoder = new TextDecoder();
@@ -245,17 +242,89 @@
             
             try {
                 const data = JSON.parse(jsonStr);
-                if (data.s === 1) {
-                    updateStatus(`正在绘制: ${data.p}%`, "green");
-                    document.getElementById('progressFill').style.width = data.p + "%";
-                } else if (data.s === 3) {
+                // 协议: {"s":status, "i":current_line_index}
+                
+                if (data.s === 1) { // Running
+                    // 计算总进度百分比 (避免依赖ESP32的p值)
+                    const total = allParsedLines.length;
+                    const pct = total > 0 ? Math.round((data.i / total) * 100) : 0;
+                    updateStatus(`正在绘制: ${pct}% (行 ${data.i})`, "green");
+                    document.getElementById('progressFill').style.width = pct + "%";
+                } else if (data.s === 3) { // Finished
                     updateStatus("绘制完成! 🎉", "green");
                     document.getElementById('uploadBtn').disabled = false;
                 }
-                if (data.c) drawTwinPath(data.c);
+
+                // 补画逻辑：从上次画到的地方，画到当前报告的地方
+                if (data.i > lastDrawnIndex) {
+                    drawSegment(lastDrawnIndex, data.i);
+                    lastDrawnIndex = data.i;
+                }
+
             } catch (e) {
                 console.warn("JSON Error");
             }
+        }
+
+        // --- 绘图逻辑 ---
+        
+        // 预解析所有坐标点，避免每次重算
+        function parseAllLines(text) {
+            allParsedLines = [];
+            let curX = 0, curY = 0;
+            let isDown = false;
+            
+            text.split('\n').forEach((line, index) => {
+                if (line.includes('M3')) isDown = true;
+                if (line.includes('M5')) isDown = false;
+                
+                const xMatch = line.match(/X([\d.]+)/);
+                const yMatch = line.match(/Y([\d.]+)/);
+                
+                if (xMatch) curX = parseFloat(xMatch[1]) * autoScale;
+                if (yMatch) curY = parseFloat(yMatch[1]) * autoScale;
+                
+                // 存入结构化数据
+                allParsedLines.push({
+                    x: curX,
+                    y: curY,
+                    isDown: isDown,
+                    valid: (line.includes('G0') || line.includes('G1'))
+                });
+            });
+        }
+
+        // 补画函数：画出 startIdx 到 endIdx 之间的所有线段
+        function drawSegment(startIdx, endIdx) {
+            if (endIdx >= allParsedLines.length) endIdx = allParsedLines.length - 1;
+            
+            ctx.beginPath();
+            ctx.strokeStyle = '#007AFF'; // 孪生高亮色
+            ctx.lineWidth = 2;
+            
+            // 找到起点
+            let startPoint = allParsedLines[startIdx];
+            if(!startPoint) return;
+            
+            let drawStartX = startPoint.x + 10;
+            let drawStartY = height - (startPoint.y + 10);
+            ctx.moveTo(drawStartX, drawStartY);
+
+            for (let i = startIdx + 1; i <= endIdx; i++) {
+                const p = allParsedLines[i];
+                if (p.valid) {
+                    const drawX = p.x + 10;
+                    const drawY = height - (p.y + 10);
+                    
+                    // 只有落笔时才画线，否则只是移动
+                    if (p.isDown) {
+                        ctx.lineTo(drawX, drawY);
+                    } else {
+                        ctx.moveTo(drawX, drawY);
+                    }
+                }
+            }
+            ctx.stroke();
         }
 
         function resetCanvas() {
@@ -305,31 +374,6 @@
                 }
             });
             ctx.stroke();
-        }
-
-        function drawTwinPath(cmd) {
-            if (!cmd.includes('G1') && !cmd.includes('G0')) return;
-            const xMatch = cmd.match(/X([\d.]+)/);
-            const yMatch = cmd.match(/Y([\d.]+)/);
-            if (!xMatch && !yMatch) return;
-
-            let newX = twinX, newY = twinY;
-            if (xMatch) newX = parseFloat(xMatch[1]) * autoScale;
-            if (yMatch) newY = parseFloat(yMatch[1]) * autoScale;
-
-            const startX = twinX + 10;
-            const startY = height - (twinY + 10);
-            const endX = newX + 10;
-            const endY = height - (newY + 10);
-
-            ctx.beginPath();
-            ctx.strokeStyle = '#007AFF';
-            ctx.lineWidth = 2;
-            ctx.moveTo(startX, startY);
-            ctx.lineTo(endX, endY);
-            ctx.stroke();
-
-            twinX = newX; twinY = newY;
         }
 
         function updateStatus(msg, color="black") {
