@@ -4,28 +4,24 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <link rel="manifest" href="manifest.json">
-    <title>Robot Twin BLE 3.0</title>
+    <title>Robot Twin BLE 3.1 (Fixed)</title>
     <style>
         :root { --primary: #007AFF; --bg: #f4f7f9; --card-bg: #ffffff; }
         body { text-align: center; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); padding: 10px; margin: 0; color: #333; }
         
-        /* 卡片容器 */
         .card { 
             background: var(--card-bg); border-radius: 20px; padding: 20px; margin: 10px auto; 
             max-width: 420px; box-shadow: 0 8px 20px rgba(0,0,0,0.08); 
         }
 
-        /* 标题栏 */
         .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
         h2 { margin: 0; font-size: 1.2rem; }
         .badge { font-size: 0.8rem; padding: 4px 8px; border-radius: 12px; background: #eee; color: #666; }
         .badge.connected { background: #34C759; color: white; }
 
-        /* 画布区域 */
-        .canvas-container { position: relative; width: 100%; padding-top: 100%; /* 1:1 Aspect Ratio */ background: #f9f9f9; border-radius: 15px; border: 1px solid #eee; margin-bottom: 15px; overflow: hidden; }
+        .canvas-container { position: relative; width: 100%; padding-top: 100%; background: #f9f9f9; border-radius: 15px; border: 1px solid #eee; margin-bottom: 15px; overflow: hidden; }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
 
-        /* 按钮样式 */
         .btn { 
             background: var(--primary); color: white; border: none; padding: 14px; 
             border-radius: 12px; width: 100%; font-size: 1rem; font-weight: 600;
@@ -38,14 +34,11 @@
         .btn-outline { background: transparent; border: 2px solid var(--primary); color: var(--primary); }
         .btn-group { display: flex; gap: 10px; margin-top: 10px; }
 
-        /* 状态显示 */
         #status { margin-top: 15px; font-size: 0.9rem; color: #666; min-height: 20px; word-break: break-all;}
         
-        /* 进度条 */
         .progress-bar { height: 6px; background: #eee; border-radius: 3px; margin: 15px 0; overflow: hidden; display: none; }
         .progress-fill { height: 100%; background: var(--primary); width: 0%; transition: width 0.3s; }
         
-        /* 调试控制 */
         .debug-panel { margin-top: 20px; padding-top: 15px; border-top: 1px dashed #eee; display: none; }
     </style>
 </head>
@@ -88,23 +81,19 @@
     </div>
 
     <script>
-        // --- 配置常量 ---
-        const SERVICE_UUID = '000000ff-0000-1000-8000-00805f9b34fb';
-        const CHAR_CMD_UUID = '000000ff-0000-1000-8000-00805f9b3401';
-        const CHAR_STAT_UUID = '000000ff-0000-1000-8000-00805f9b3402';
+        // --- 修复点：UUID 必须与 main.c 中的定义完全一致 ---
+        // C代码中: uuid128[12] = 0x01，对应 UUID 字符串的前部
+        const SERVICE_UUID   = '000000ff-0000-1000-8000-00805f9b34fb';
+        const CHAR_CMD_UUID  = '0000ff01-0000-1000-8000-00805f9b34fb'; // 修复：之前是 ...3401
+        const CHAR_STAT_UUID = '0000ff02-0000-1000-8000-00805f9b34fb'; // 修复：之前是 ...3402
         
-        // --- 全局变量 ---
         let device, server, service, charCmd, charStat;
         let gcodeContent = "";
         let autoScale = 1.0;
-        let canvas, ctx;
-        let width, height;
+        let canvas, ctx, width, height;
         let isConnected = false;
-        
-        // 数字孪生状态
         let twinX = 0, twinY = 0;
 
-        // PWA Service Worker
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('service-worker.js').catch(console.error);
         }
@@ -112,7 +101,6 @@
         window.onload = () => {
             canvas = document.getElementById('preview');
             ctx = canvas.getContext('2d');
-            // 适配高清屏
             const dpr = window.devicePixelRatio || 1;
             const rect = canvas.parentElement.getBoundingClientRect();
             canvas.width = rect.width * dpr;
@@ -123,19 +111,14 @@
             resetCanvas();
         };
 
-        // --- 蓝牙连接逻辑 ---
         async function toggleConnection() {
-            if (isConnected) {
-                disconnectBLE();
-            } else {
-                connectBLE();
-            }
+            if (isConnected) disconnectBLE();
+            else connectBLE();
         }
 
         async function connectBLE() {
             updateStatus("正在搜索设备...", "blue");
             try {
-                // [关键修复] 使用 services 过滤，解决扫描响应包名字丢失导致的不可见问题
                 device = await navigator.bluetooth.requestDevice({
                     filters: [{ services: [SERVICE_UUID] }],
                     optionalServices: [SERVICE_UUID]
@@ -146,24 +129,30 @@
                 
                 server = await device.gatt.connect();
                 service = await server.getPrimaryService(SERVICE_UUID);
-                charCmd = await service.getCharacteristic(CHAR_CMD_UUID);
-                charStat = await service.getCharacteristic(CHAR_STAT_UUID);
+                
+                // 获取特征值 (这里如果 UUID 不对会报错)
+                try {
+                    charCmd = await service.getCharacteristic(CHAR_CMD_UUID);
+                    charStat = await service.getCharacteristic(CHAR_STAT_UUID);
+                } catch (e) {
+                    throw new Error("UUID 不匹配，请检查固件版本。");
+                }
 
-                // 开启通知
                 await charStat.startNotifications();
                 charStat.addEventListener('characteristicvaluechanged', handleStatusUpdate);
 
-                onConnected();
+                onConnected(); // 连接成功，激活界面
             } catch (error) {
                 console.error(error);
-                updateStatus("连接失败: " + error.message, "red");
+                // 修复：防止显示 undefined
+                let msg = error.message || error.toString();
+                if (msg.includes("User cancelled")) msg = "用户取消操作";
+                updateStatus("未连接：" + msg, "red");
             }
         }
 
         function disconnectBLE() {
-            if (device && device.gatt.connected) {
-                device.gatt.disconnect();
-            }
+            if (device && device.gatt.connected) device.gatt.disconnect();
         }
 
         function onConnected() {
@@ -172,11 +161,12 @@
             document.getElementById('connectionBadge').classList.add("connected");
             document.getElementById('connectBtn').innerText = "❌ 断开连接";
             document.getElementById('connectBtn').classList.add("btn-outline");
+            
+            // 激活加载按钮
             document.getElementById('loadBtn').disabled = false;
             if (gcodeContent) document.getElementById('uploadBtn').disabled = false;
-            updateStatus("设备已就绪", "green");
             
-            // 每次连接重置数字孪生位置
+            updateStatus("设备已就绪", "green");
             twinX = 0; twinY = 0;
         }
 
@@ -192,57 +182,48 @@
             updateStatus("设备已断开", "orange");
         }
 
-        // --- G-Code 处理与上传 ---
         async function handleFileSelect(file) {
             if (!file) return;
             const text = await file.text();
             gcodeContent = text;
-            
-            // 1. 计算缩放并绘制预览 (灰色背景轨迹)
             calculateScale(text);
             resetCanvas();
-            drawPreview(text, '#e0e0e0'); // 预览色
+            drawPreview(text, '#e0e0e0');
             
+            // 只有连接状态下才允许上传
             document.getElementById('uploadBtn').disabled = !isConnected;
             updateStatus(`已加载: ${file.name} (${(file.size/1024).toFixed(1)}KB)`, "black");
         }
 
         async function startUploadAndPrint() {
-            if (!gcodeContent) return;
-            if (!charCmd) return;
+            if (!gcodeContent || !charCmd) return;
 
             document.getElementById('uploadBtn').disabled = true;
             document.getElementById('stopBtn').disabled = false;
             document.getElementById('progressContainer').style.display = 'block';
             
             try {
-                // 1. 发送新文件指令
-                updateStatus("正在重置文件...", "blue");
+                updateStatus("正在初始化...", "blue");
                 await sendCommand("CMD:NEWFILE");
 
-                // 2. 分片发送
                 const lines = gcodeContent.split('\n');
                 const total = lines.length;
-                let buffer = "";
-                const CHUNK_SIZE = 400; // 聚合多个短行，减少BLE包头开销
-
+                
                 for (let i = 0; i < total; i++) {
                     const line = lines[i].trim();
                     if (line.length === 0 || line.startsWith(';')) continue;
                     
-                    // 简单流控
                     await sendCommand(line + "\n");
                     
-                    // 更新UI
                     if (i % 20 === 0) {
                         const pct = Math.round((i / total) * 100);
                         document.getElementById('progressFill').style.width = pct + "%";
                         updateStatus(`上传中... ${pct}%`, "blue");
-                        await new Promise(r => setTimeout(r, 10)); // 给UI喘息时间
+                        await new Promise(r => setTimeout(r, 10));
                     }
                 }
                 
-                updateStatus("上传完成，发送启动指令...", "blue");
+                updateStatus("发送启动指令...", "blue");
                 await sendCommand("CMD:START");
                 
             } catch (e) {
@@ -254,42 +235,29 @@
         async function sendCommand(cmd) {
             if (!charCmd) return;
             const encoder = new TextEncoder();
-            // 写入并不等待响应，提高速度 (Write Without Response)
-            // 注意：如果 ESP32 端处理不过来，可能需要加短暂延时
             await charCmd.writeValue(encoder.encode(cmd));
         }
 
-        // --- 数字孪生：状态反馈与实时绘图 ---
         function handleStatusUpdate(event) {
             const value = event.target.value;
             const decoder = new TextDecoder();
             const jsonStr = decoder.decode(value);
             
             try {
-                // 协议: {"s":status, "p":progress, "c":"G1 X10 Y20"}
                 const data = JSON.parse(jsonStr);
-                
-                // 1. 更新进度文字
-                if (data.s === 1) { // Running
+                if (data.s === 1) {
                     updateStatus(`正在绘制: ${data.p}%`, "green");
                     document.getElementById('progressFill').style.width = data.p + "%";
-                } else if (data.s === 3) { // Finished
+                } else if (data.s === 3) {
                     updateStatus("绘制完成! 🎉", "green");
                     document.getElementById('uploadBtn').disabled = false;
                 }
-
-                // 2. 数字孪生 (核心功能)
-                // 解析 ESP32 当前执行的指令，并在 Canvas 上绘制实线
-                if (data.c) {
-                    drawTwinPath(data.c);
-                }
-
+                if (data.c) drawTwinPath(data.c);
             } catch (e) {
-                console.warn("JSON Parse Error:", jsonStr);
+                console.warn("JSON Error");
             }
         }
 
-        // --- 绘图逻辑 ---
         function resetCanvas() {
             ctx.clearRect(0, 0, width, height);
             ctx.lineCap = "round";
@@ -304,69 +272,48 @@
                 if (x) maxX = Math.max(maxX, parseFloat(x[1]));
                 if (y) maxY = Math.max(maxY, parseFloat(y[1]));
             });
-            // 留白 20px
             const padding = 20;
             const availW = width - padding * 2;
             const availH = height - padding * 2;
-            
             if (maxX > 0 && maxY > 0) {
-                const scaleX = availW / maxX;
-                const scaleY = availH / maxY;
-                autoScale = Math.min(scaleX, scaleY);
+                autoScale = Math.min(availW / maxX, availH / maxY);
             } else {
                 autoScale = 1.0;
             }
         }
 
-        // 绘制静态预览 (灰色)
         function drawPreview(text, color) {
             ctx.beginPath();
             ctx.strokeStyle = color;
             ctx.lineWidth = 1;
-            
             let curX = 0, curY = 0;
             let isDown = false;
 
             text.split('\n').forEach(line => {
-                // 解析 M3/M5 (假设 M3=落笔, M5=抬笔)
                 if (line.includes('M3')) isDown = true;
                 if (line.includes('M5')) isDown = false;
-                
-                // 解析坐标
                 const xMatch = line.match(/X([\d.]+)/);
                 const yMatch = line.match(/Y([\d.]+)/);
-                
                 if (xMatch) curX = parseFloat(xMatch[1]) * autoScale;
                 if (yMatch) curY = parseFloat(yMatch[1]) * autoScale;
-
-                // 坐标变换 (增加边距 + 翻转Y轴适配 Canvas)
                 const drawX = curX + 10;
-                const drawY = height - (curY + 10); // 假设原点在左下角
+                const drawY = height - (curY + 10);
 
                 if (line.includes('G0') || line.includes('G1')) {
-                    if (isDown) {
-                        ctx.lineTo(drawX, drawY);
-                    } else {
-                        ctx.moveTo(drawX, drawY);
-                    }
+                    if (isDown) ctx.lineTo(drawX, drawY);
+                    else ctx.moveTo(drawX, drawY);
                 }
             });
             ctx.stroke();
         }
 
-        // 绘制实时孪生路径 (蓝色)
         function drawTwinPath(cmd) {
-            // cmd 类似于 "G1 X10.5 Y20.0"
             if (!cmd.includes('G1') && !cmd.includes('G0')) return;
-
             const xMatch = cmd.match(/X([\d.]+)/);
             const yMatch = cmd.match(/Y([\d.]+)/);
-            
-            if (!xMatch && !yMatch) return; // 没有坐标变动
+            if (!xMatch && !yMatch) return;
 
-            let newX = twinX;
-            let newY = twinY;
-            
+            let newX = twinX, newY = twinY;
             if (xMatch) newX = parseFloat(xMatch[1]) * autoScale;
             if (yMatch) newY = parseFloat(yMatch[1]) * autoScale;
 
@@ -376,18 +323,15 @@
             const endY = height - (newY + 10);
 
             ctx.beginPath();
-            ctx.strokeStyle = '#007AFF'; // 孪生高亮色
+            ctx.strokeStyle = '#007AFF';
             ctx.lineWidth = 2;
             ctx.moveTo(startX, startY);
             ctx.lineTo(endX, endY);
             ctx.stroke();
 
-            // 更新当前孪生坐标
-            twinX = newX;
-            twinY = newY;
+            twinX = newX; twinY = newY;
         }
 
-        // --- 工具函数 ---
         function updateStatus(msg, color="black") {
             const el = document.getElementById('status');
             el.innerText = msg;
