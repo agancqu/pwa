@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <link rel="manifest" href="manifest.json">
-    <title>Robot Twin BLE 3.3 (iOS Fix)</title>
+    <title>Robot Twin BLE 3.4 (UI Logic Fix)</title>
     <style>
         :root { --primary: #007AFF; --bg: #f4f7f9; --card-bg: #ffffff; }
         body { text-align: center; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); padding: 10px; margin: 0; color: #333; }
@@ -63,12 +63,12 @@
         <button id="connectBtn" class="btn" onclick="toggleConnection()">📡 连接蓝牙设备</button>
         
         <input type="file" id="fileInput" accept=".gcode,.txt,.nc,.py,text/*,*/*" style="display:none" onchange="handleFileSelect(this.files[0])">
-        
         <button id="loadBtn" class="btn btn-outline" onclick="document.getElementById('fileInput').click()" disabled>📂 1. 加载 G-Code</button>
-        <button id="uploadBtn" class="btn" onclick="startUploadAndPrint()" disabled>▶️ 2. 上传并开始打印</button>
+        <button id="uploadBtn" class="btn" onclick="startUploadAndPrint()" disabled>▶️ 2. 上传文件</button>
+
+        <button id="controlBtn" class="btn" onclick="toggleDrawing()" disabled>▶ 开始绘画</button>
 
         <div class="btn-group">
-            <button id="stopBtn" class="btn btn-stop" onclick="sendCommand('CMD:STOP')" disabled>⏸ 暂停</button>
             <button class="btn btn-outline" onclick="toggleDebug()">🛠 调试</button>
         </div>
 
@@ -92,7 +92,6 @@
         let canvas, ctx, width, height;
         let isConnected = false;
         
-        // --- 核心优化变量 ---
         let allParsedLines = [];
         let lastDrawnIndex = 0;
         
@@ -177,7 +176,11 @@
             document.getElementById('connectBtn').classList.remove("btn-outline");
             document.getElementById('loadBtn').disabled = true;
             document.getElementById('uploadBtn').disabled = true;
-            document.getElementById('stopBtn').disabled = true;
+            // 断开时禁用控制按钮
+            document.getElementById('controlBtn').disabled = true;
+            document.getElementById('controlBtn').innerText = "▶ 开始绘画";
+            document.getElementById('controlBtn').className = "btn";
+            
             updateStatus("设备已断开", "orange");
         }
 
@@ -185,14 +188,11 @@
             if (!file) return;
             const text = await file.text();
             gcodeContent = text;
-            
             calculateScale(text);
             parseAllLines(text);
-            
             resetCanvas();
             drawPreview(text, '#e0e0e0');
             lastDrawnIndex = 0;
-            
             document.getElementById('uploadBtn').disabled = !isConnected;
             updateStatus(`已加载: ${file.name} (${(file.size/1024).toFixed(1)}KB)`, "black");
         }
@@ -201,7 +201,6 @@
             if (!gcodeContent || !charCmd) return;
 
             document.getElementById('uploadBtn').disabled = true;
-            document.getElementById('stopBtn').disabled = false;
             document.getElementById('progressContainer').style.display = 'block';
             lastDrawnIndex = 0;
             
@@ -226,12 +225,37 @@
                     }
                 }
                 
-                updateStatus("发送启动指令...", "blue");
-                await sendCommand("CMD:START");
+                updateStatus("上传完成，请点击开始", "green");
+                // [Bug 1 修复] 上传完成后激活“开始”按钮，但不自动启动
+                document.getElementById('uploadBtn').disabled = false;
+                const ctrlBtn = document.getElementById('controlBtn');
+                ctrlBtn.disabled = false;
+                ctrlBtn.innerText = "▶ 开始绘画";
+                ctrlBtn.className = "btn"; // 绿色样式
                 
             } catch (e) {
                 updateStatus("上传中断: " + e.message, "red");
                 document.getElementById('uploadBtn').disabled = false;
+            }
+        }
+
+        // [Bug 1 & 2 修复] 单按钮控制逻辑：Start -> Pause -> Resume
+        async function toggleDrawing() {
+            const btn = document.getElementById('controlBtn');
+            const btnText = btn.innerText;
+
+            if (btnText.includes("开始") || btnText.includes("继续")) {
+                // 执行启动逻辑
+                await sendCommand("CMD:START");
+                btn.innerText = "⏸ 暂停";
+                btn.className = "btn btn-stop"; // 变为红色
+                updateStatus("正在绘画...", "green");
+            } else {
+                // 执行暂停逻辑
+                await sendCommand("CMD:STOP");
+                btn.innerText = "▶ 继续";
+                btn.className = "btn"; // 变为绿色
+                updateStatus("已暂停", "orange");
             }
         }
 
@@ -249,14 +273,29 @@
             try {
                 const data = JSON.parse(jsonStr);
                 
-                if (data.s === 1) { 
+                // [优化] 根据设备返回的状态同步按钮 UI
+                const btn = document.getElementById('controlBtn');
+                if (data.s === 1) { // Running
+                    if (!btn.innerText.includes("暂停")) {
+                        btn.innerText = "⏸ 暂停";
+                        btn.className = "btn btn-stop";
+                        btn.disabled = false;
+                    }
+                    // 更新进度条
                     const total = allParsedLines.length;
                     const pct = total > 0 ? Math.round((data.i / total) * 100) : 0;
                     updateStatus(`正在绘制: ${pct}% (行 ${data.i})`, "green");
                     document.getElementById('progressFill').style.width = pct + "%";
-                } else if (data.s === 3) { 
+                } else if (data.s === 2) { // Paused
+                     if (!btn.innerText.includes("继续")) {
+                        btn.innerText = "▶ 继续";
+                        btn.className = "btn";
+                     }
+                } else if (data.s === 3) { // Finished
                     updateStatus("绘制完成! 🎉", "green");
-                    document.getElementById('uploadBtn').disabled = false;
+                    btn.innerText = "▶ 开始绘画"; // 重置为初始状态
+                    btn.className = "btn";
+                    btn.disabled = false; 
                 }
 
                 if (data.i > lastDrawnIndex) {
