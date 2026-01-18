@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <link rel="manifest" href="manifest.json">
-    <title>Robot Twin BLE 3.4 (UI Logic Fix)</title>
+    <title>Robot Twin BLE 3.5 (Sync Fix)</title>
     <style>
         :root { --primary: #007AFF; --bg: #f4f7f9; --card-bg: #ffffff; }
         body { text-align: center; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); padding: 10px; margin: 0; color: #333; }
@@ -176,7 +176,6 @@
             document.getElementById('connectBtn').classList.remove("btn-outline");
             document.getElementById('loadBtn').disabled = true;
             document.getElementById('uploadBtn').disabled = true;
-            // 断开时禁用控制按钮
             document.getElementById('controlBtn').disabled = true;
             document.getElementById('controlBtn').innerText = "▶ 开始绘画";
             document.getElementById('controlBtn').className = "btn";
@@ -226,12 +225,11 @@
                 }
                 
                 updateStatus("上传完成，请点击开始", "green");
-                // [Bug 1 修复] 上传完成后激活“开始”按钮，但不自动启动
                 document.getElementById('uploadBtn').disabled = false;
                 const ctrlBtn = document.getElementById('controlBtn');
                 ctrlBtn.disabled = false;
                 ctrlBtn.innerText = "▶ 开始绘画";
-                ctrlBtn.className = "btn"; // 绿色样式
+                ctrlBtn.className = "btn";
                 
             } catch (e) {
                 updateStatus("上传中断: " + e.message, "red");
@@ -239,22 +237,19 @@
             }
         }
 
-        // [Bug 1 & 2 修复] 单按钮控制逻辑：Start -> Pause -> Resume
         async function toggleDrawing() {
             const btn = document.getElementById('controlBtn');
             const btnText = btn.innerText;
 
             if (btnText.includes("开始") || btnText.includes("继续")) {
-                // 执行启动逻辑
                 await sendCommand("CMD:START");
                 btn.innerText = "⏸ 暂停";
-                btn.className = "btn btn-stop"; // 变为红色
+                btn.className = "btn btn-stop";
                 updateStatus("正在绘画...", "green");
             } else {
-                // 执行暂停逻辑
                 await sendCommand("CMD:STOP");
                 btn.innerText = "▶ 继续";
-                btn.className = "btn"; // 变为绿色
+                btn.className = "btn";
                 updateStatus("已暂停", "orange");
             }
         }
@@ -273,7 +268,6 @@
             try {
                 const data = JSON.parse(jsonStr);
                 
-                // [优化] 根据设备返回的状态同步按钮 UI
                 const btn = document.getElementById('controlBtn');
                 if (data.s === 1) { // Running
                     if (!btn.innerText.includes("暂停")) {
@@ -281,7 +275,6 @@
                         btn.className = "btn btn-stop";
                         btn.disabled = false;
                     }
-                    // 更新进度条
                     const total = allParsedLines.length;
                     const pct = total > 0 ? Math.round((data.i / total) * 100) : 0;
                     updateStatus(`正在绘制: ${pct}% (行 ${data.i})`, "green");
@@ -293,7 +286,7 @@
                      }
                 } else if (data.s === 3) { // Finished
                     updateStatus("绘制完成! 🎉", "green");
-                    btn.innerText = "▶ 开始绘画"; // 重置为初始状态
+                    btn.innerText = "▶ 开始绘画"; 
                     btn.className = "btn";
                     btn.disabled = false; 
                 }
