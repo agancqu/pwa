@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <link rel="manifest" href="manifest.json">
-    <title>Robot Twin BLE 3.8 (Fast + LineProgress)</title>
+    <title>Robot Twin BLE 3.10 (Coordinate Fix)</title>
     <style>
         :root { --primary: #007AFF; --bg: #f4f7f9; --card-bg: #ffffff; }
         body { text-align: center; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); padding: 10px; margin: 0; color: #333; }
@@ -74,6 +74,10 @@
         </div>
 
         <div id="debugPanel" class="debug-panel">
+            <div class="toggle-row">
+                <input type="checkbox" id="turboToggle" onchange="toggleTurbo()">
+                <label for="turboToggle">🚀 极速仿真 (Turbo Mode)</label>
+            </div>
             <div class="btn-group">
                 <button class="btn btn-outline" onclick="sendCommand('CMD:SERVO_FWD')">⬇ 落笔</button>
                 <button class="btn btn-outline" onclick="sendCommand('CMD:SERVO_REV')">⬆ 抬笔</button>
@@ -95,6 +99,8 @@
         
         let allParsedLines = [];
         let lastDrawnIndex = 0;
+        // [Bug Fix] 新增坐标系模式标志
+        let isM3Mode = false;
         
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('service-worker.js').catch(console.error);
@@ -160,6 +166,7 @@
             if (gcodeContent) document.getElementById('uploadBtn').disabled = false;
             
             updateStatus("设备已就绪", "green");
+            toggleTurbo(); 
             twinX = 0; twinY = 0;
         }
 
@@ -181,6 +188,10 @@
             if (!file) return;
             const text = await file.text();
             gcodeContent = text;
+            
+            // [Bug Fix] 检测文件是否为 M3 模式 (决定是否翻转 Y 轴)
+            isM3Mode = text.includes('M3') || text.includes('M5');
+            
             calculateScale(text);
             parseAllLines(text);
             resetCanvas();
@@ -190,7 +201,6 @@
             updateStatus(`已加载: ${file.name} (${(file.size/1024).toFixed(1)}KB)`, "black");
         }
 
-        // [核心优化] 拼包发送，但保持按行计数进度
         async function startUploadAndPrint() {
             if (!gcodeContent || !charCmd) return;
 
@@ -205,7 +215,6 @@
                 const lines = gcodeContent.split('\n');
                 const totalLines = lines.length;
                 let chunk = "";
-                // 350字节约等于20行指令，足够安全且高效
                 const CHUNK_LIMIT = 350; 
 
                 for (let i = 0; i < totalLines; i++) {
@@ -214,29 +223,24 @@
                     
                     line += "\n";
                     
-                    // 如果加上当前行超过限制，先发送当前包
                     if (chunk.length + line.length > CHUNK_LIMIT) {
                         await sendCommand(chunk);
                         chunk = "";
                         
-                        // 更新进度：使用行号 i 来计算
-                        if (i % 20 === 0) { // 减少UI刷新频率
+                        if (i % 20 === 0) {
                             const pct = Math.round((i / totalLines) * 100);
                             document.getElementById('progressFill').style.width = pct + "%";
                             updateStatus(`极速上传中... ${pct}% (${i}/${totalLines}行)`, "blue");
-                            // 微小延时防止拥塞
                             await new Promise(r => setTimeout(r, 5));
                         }
                     }
                     chunk += line;
                 }
                 
-                // 发送剩余尾包
                 if (chunk.length > 0) {
                     await sendCommand(chunk);
                 }
                 
-                // 强制进度 100%
                 document.getElementById('progressFill').style.width = "100%";
                 updateStatus("上传成功 (100%)，请点击开始", "green");
                 
@@ -269,10 +273,15 @@
             }
         }
 
+        async function toggleTurbo() {
+            if (!isConnected) return;
+            const isTurbo = document.getElementById('turboToggle').checked;
+            await sendCommand(isTurbo ? "CMD:TURBO_ON" : "CMD:TURBO_OFF");
+        }
+
         async function sendCommand(cmd) {
             if (!charCmd) return;
             const encoder = new TextEncoder();
-            // Write With Response 保证不丢包
             await charCmd.writeValue(encoder.encode(cmd));
         }
 
@@ -285,23 +294,22 @@
                 const data = JSON.parse(jsonStr);
                 const btn = document.getElementById('controlBtn');
                 
-                if (data.s === 1) { // Running
+                if (data.s === 1) { 
                     if (!btn.innerText.includes("暂停")) {
                         btn.innerText = "⏸ 暂停";
                         btn.className = "btn btn-stop";
                         btn.disabled = false;
                     }
-                    // 绘画进度条也是按行数计算
                     const total = allParsedLines.length;
                     const pct = total > 0 ? Math.round((data.i / total) * 100) : 0;
                     updateStatus(`绘制中: ${pct}% (行 ${data.i})`, "green");
                     document.getElementById('progressFill').style.width = pct + "%";
-                } else if (data.s === 2) { // Paused
+                } else if (data.s === 2) { 
                      if (!btn.innerText.includes("继续")) {
                         btn.innerText = "▶ 继续";
                         btn.className = "btn btn-green";
                      }
-                } else if (data.s === 3) { // Finished
+                } else if (data.s === 3) { 
                     updateStatus("绘制完成! 🎉", "green");
                     btn.innerText = "▶ 开始绘画"; 
                     btn.className = "btn btn-green";
@@ -320,15 +328,19 @@
 
         function parseAllLines(text) {
             allParsedLines = [];
-            let curX = 0, curY = 0;
-            let isDown = false;
+            let curX = 0, curY = 0, isDown = false;
             
             text.split('\n').forEach((line, index) => {
                 if (line.includes('M3')) isDown = true;
                 if (line.includes('M5')) isDown = false;
                 
-                const xMatch = line.match(/X([\d.]+)/);
-                const yMatch = line.match(/Y([\d.]+)/);
+                const zMatch = line.match(/Z([-\d.]+)/);
+                if (zMatch) {
+                    isDown = (parseFloat(zMatch[1]) <= 0);
+                }
+                
+                const xMatch = line.match(/X([-\d.]+)/);
+                const yMatch = line.match(/Y([-\d.]+)/);
                 
                 if (xMatch) curX = parseFloat(xMatch[1]) * autoScale;
                 if (yMatch) curY = parseFloat(yMatch[1]) * autoScale;
@@ -342,6 +354,7 @@
             });
         }
 
+        // [Bug Fix] 孪生绘制逻辑：根据 isM3Mode 决定是否翻转 Y
         function drawSegment(startIdx, endIdx) {
             if (endIdx >= allParsedLines.length) endIdx = allParsedLines.length - 1;
             
@@ -353,20 +366,19 @@
             if(!startPoint) return;
             
             let drawStartX = startPoint.x + 10;
-            let drawStartY = height - (startPoint.y + 10);
+            // 核心修复点 1
+            let drawStartY = isM3Mode ? (height - (startPoint.y + 10)) : (startPoint.y + 10);
             ctx.moveTo(drawStartX, drawStartY);
 
             for (let i = startIdx + 1; i <= endIdx; i++) {
                 const p = allParsedLines[i];
                 if (p.valid) {
                     const drawX = p.x + 10;
-                    const drawY = height - (p.y + 10);
+                    // 核心修复点 2
+                    const drawY = isM3Mode ? (height - (p.y + 10)) : (p.y + 10);
                     
-                    if (p.isDown) {
-                        ctx.lineTo(drawX, drawY);
-                    } else {
-                        ctx.moveTo(drawX, drawY);
-                    }
+                    if (p.isDown) ctx.lineTo(drawX, drawY);
+                    else ctx.moveTo(drawX, drawY);
                 }
             }
             ctx.stroke();
@@ -381,8 +393,8 @@
         function calculateScale(text) {
             let maxX = 0, maxY = 0;
             text.split('\n').forEach(line => {
-                const x = line.match(/X([\d.]+)/);
-                const y = line.match(/Y([\d.]+)/);
+                const x = line.match(/X([-\d.]+)/);
+                const y = line.match(/Y([-\d.]+)/);
                 if (x) maxX = Math.max(maxX, parseFloat(x[1]));
                 if (y) maxY = Math.max(maxY, parseFloat(y[1]));
             });
@@ -396,6 +408,7 @@
             }
         }
 
+        // [Bug Fix] 预览绘制逻辑：根据 isM3Mode 决定是否翻转 Y
         function drawPreview(text, color) {
             ctx.beginPath();
             ctx.strokeStyle = color;
@@ -406,12 +419,19 @@
             text.split('\n').forEach(line => {
                 if (line.includes('M3')) isDown = true;
                 if (line.includes('M5')) isDown = false;
-                const xMatch = line.match(/X([\d.]+)/);
-                const yMatch = line.match(/Y([\d.]+)/);
+                
+                const zMatch = line.match(/Z([-\d.]+)/);
+                if (zMatch) isDown = (parseFloat(zMatch[1]) <= 0);
+
+                const xMatch = line.match(/X([-\d.]+)/);
+                const yMatch = line.match(/Y([-\d.]+)/);
+                
                 if (xMatch) curX = parseFloat(xMatch[1]) * autoScale;
                 if (yMatch) curY = parseFloat(yMatch[1]) * autoScale;
+                
                 const drawX = curX + 10;
-                const drawY = height - (curY + 10);
+                // 核心修复点 3
+                const drawY = isM3Mode ? (height - (curY + 10)) : (curY + 10);
 
                 if (line.includes('G0') || line.includes('G1')) {
                     if (isDown) ctx.lineTo(drawX, drawY);
