@@ -4,150 +4,485 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <link rel="manifest" href="manifest.json">
-    <title>Robot Twin BLE 3.10 (Coordinate Fix)</title>
+    <title>Robot Studio BLE 5.0 (Layout Final)</title>
     <style>
-        :root { --primary: #007AFF; --bg: #f4f7f9; --card-bg: #ffffff; }
-        body { text-align: center; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); padding: 10px; margin: 0; color: #333; }
-        
-        .card { 
-            background: var(--card-bg); border-radius: 20px; padding: 20px; margin: 10px auto; 
-            max-width: 420px; box-shadow: 0 8px 20px rgba(0,0,0,0.08); 
+        /* --- 核心基础样式 --- */
+        :root {
+            --primary: #007AFF;
+            --primary-dark: #0056b3;
+            --success: #34C759;
+            --success-dark: #248a3d;
+            --danger: #FF3B30;
+            --danger-dark: #cc2f26;
+            --bg-color: #F2F2F7;
+            --card-bg: #FFFFFF;
+            --text-main: #1C1C1E;
+            --text-sub: #8E8E93;
+            --border-radius: 16px;
         }
 
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-        h2 { margin: 0; font-size: 1.2rem; }
-        .badge { font-size: 0.8rem; padding: 4px 8px; border-radius: 12px; background: #eee; color: #666; }
-        .badge.connected { background: #34C759; color: white; }
-
-        .canvas-container { position: relative; width: 100%; padding-top: 100%; background: #f9f9f9; border-radius: 15px; border: 1px solid #eee; margin-bottom: 15px; overflow: hidden; }
-        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
-
-        .btn { 
-            background: var(--primary); color: white; border: none; padding: 14px; 
-            border-radius: 12px; width: 100%; font-size: 1rem; font-weight: 600;
-            cursor: pointer; margin-top: 10px; transition: opacity 0.2s;
-            display: flex; align-items: center; justify-content: center; gap: 8px;
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            /* [修复] 版权离底距离减小一倍 (原40px -> 20px) */
+            padding-bottom: 20px;
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
         }
-        .btn:active { opacity: 0.8; }
-        .btn:disabled { background: #e0e0e0; color: #999; cursor: not-allowed; }
-        .btn-stop { background: #FF3B30; }
-        .btn-green { background: #34C759; }
-        .btn-outline { background: transparent; border: 2px solid var(--primary); color: var(--primary); }
-        .btn-group { display: flex; gap: 10px; margin-top: 10px; }
 
-        #status { margin-top: 15px; font-size: 0.9rem; color: #666; min-height: 20px; word-break: break-all;}
+        /* --- 布局工具类 --- */
+        .max-w-md { max-width: 480px; margin: 0 auto; }
+        .px-4 { padding-left: 1rem; padding-right: 1rem; }
+        .py-3 { padding-top: 0.75rem; padding-bottom: 0.75rem; }
+        .p-4 { padding: 1rem; }
+        .p-3 { padding: 0.75rem; }
+        .mb-1 { margin-bottom: 0.25rem; }
+        .mb-2 { margin-bottom: 0.5rem; }
+        .mb-3 { margin-bottom: 0.75rem; }
+        .mb-4 { margin-bottom: 1rem; }
+        /* [修复] 按钮与底部间距增加2倍 (原mb-6 -> mb-12) */
+        .mb-12 { margin-bottom: 3rem; }
+        .pb-2 { padding-bottom: 0.5rem; } /* 版权文字padding减小 */
         
-        .progress-bar { height: 6px; background: #eee; border-radius: 3px; margin: 15px 0; overflow: hidden; display: none; }
-        .progress-fill { height: 100%; background: var(--primary); width: 0%; transition: width 0.2s; }
+        .mt-2 { margin-top: 0.5rem; }
+        .space-y-4 > * + * { margin-top: 1rem; }
         
-        .debug-panel { margin-top: 20px; padding-top: 15px; border-top: 1px dashed #eee; display: none; }
+        .relative { position: relative; }
+        .absolute { position: absolute; }
+        .inset-0 { top: 0; right: 0; bottom: 0; left: 0; }
+        .w-full { width: 100%; }
+        .h-full { height: 100%; }
+        .z-10 { z-index: 10; }
+        .opacity-0 { opacity: 0; cursor: pointer; } 
+        
+        .flex { display: flex; }
+        .flex-col { flex-direction: column; }
+        .items-center { align-items: center; }
+        .justify-between { justify-content: space-between; }
+        .justify-center { justify-content: center; }
+        .gap-1 { gap: 0.25rem; }
+        .gap-2 { gap: 0.5rem; }
+        .gap-3 { gap: 0.75rem; }
+        .gap-4 { gap: 1rem; }
+        .grid { display: grid; }
+        .grid-cols-2 { grid-template-columns: 1fr 1fr; }
+        .col-span-2 { grid-column: span 2; }
+
+        .text-center { text-align: center; }
+        .text-xs { font-size: 0.75rem; color: var(--text-sub); }
+        .text-sm { font-size: 0.9rem; }
+        .text-lg { font-size: 1.125rem; font-weight: 700; }
+        .font-bold { font-weight: 600; }
+        .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        /* 卡片样式 */
+        .card {
+            background-color: var(--card-bg);
+            border-radius: var(--border-radius);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            padding: 1.25rem;
+            margin-bottom: 1rem;
+            overflow: hidden;
+        }
+
+        .navbar {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            border-bottom: 1px solid rgba(0,0,0,0.1);
+            padding-bottom: 0; 
+        }
+
+        /* 状态栏 */
+        #status {
+            font-size: 0.95rem; 
+            font-weight: 600;
+            color: var(--text-main);
+            padding: 8px 12px;
+            border-radius: 8px;
+            margin: 8px auto;
+            transition: all 0.5s ease;
+        }
+
+        @keyframes breathe {
+            0% { background-color: #E0F2FE; } 
+            50% { background-color: #DCFCE7; } 
+            100% { background-color: #E0F2FE; }
+        }
+        .status-breathing {
+            animation: breathe 3s infinite ease-in-out;
+            color: #000 !important;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+
+        /* 高级参数按钮 */
+        .advanced-summary {
+            padding: 1.0rem 1rem; 
+            font-size: 1.1rem;    
+            font-weight: 600;
+            color: var(--text-main);
+            background-color: #F9FAFB;
+            cursor: pointer;
+            list-style: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-radius: 12px;
+            border: 1px solid #E5E5EA;
+            transition: background-color 0.2s;
+        }
+        .advanced-summary:active { background-color: #F3F4F6; }
+        .advanced-summary::-webkit-details-marker { display: none; }
+        .summary-arrow {
+            font-size: 1.2em; 
+            transition: transform 0.3s;
+            color: var(--text-sub);
+        }
+        details[open] .summary-arrow { transform: rotate(180deg); }
+
+        /* 按钮样式 */
+        .btn {
+            width: 100%;
+            padding: 14px 20px;
+            border-radius: 12px;
+            border: none;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            color: white;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+        }
+        .btn:active { transform: scale(0.97); }
+        .btn:disabled { background-color: #E5E5EA !important; color: #8E8E93 !important; cursor: not-allowed; box-shadow: none; }
+
+        .btn-primary { background-color: var(--primary); }
+        .btn-primary:hover:not(:disabled) { background-color: var(--primary-dark); }
+        .btn-success { background-color: var(--success); }
+        .btn-success:hover:not(:disabled) { background-color: var(--success-dark); }
+        .btn-danger { background-color: var(--danger); }
+        .btn-danger:hover:not(:disabled) { background-color: var(--danger-dark); }
+
+        .btn-outline {
+            background-color: transparent;
+            border: 2px solid #E5E5EA;
+            color: var(--primary);
+            box-shadow: none;
+            padding: 8px 12px;
+            font-size: 0.85rem;
+        }
+
+        .upload-area {
+            background-color: #F2F2F7;
+            border: 2px dashed #C7C7CC;
+            border-radius: 12px;
+            height: 54px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            transition: background-color 0.2s;
+            cursor: pointer;
+        }
+        .upload-area:active { background-color: #E5E5EA; }
+        .upload-icon { font-size: 1.2rem; }
+        .upload-text { font-size: 0.9rem; font-weight: 500; color: var(--text-main); }
+        .upload-sub { font-size: 0.75rem; color: var(--text-sub); }
+
+        .loader {
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top: 3px solid #ffffff;
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        .hidden { display: none !important; }
+
+        canvas { display: block; image-rendering: pixelated; }
+        
+        .ratio-container {
+            width: 100%;
+            position: relative;
+            background: #fff;
+            border-radius: 12px;
+            border: 1px solid #E5E5EA;
+            overflow: hidden;
+            box-shadow: inset 0 2px 6px rgba(0,0,0,0.05);
+            padding-top: 100%; 
+            transition: padding-top 0.3s ease;
+        }
+
+        .checkerboard-bg {
+            background-image: 
+                linear-gradient(45deg, #f0f0f0 25%, transparent 25%), 
+                linear-gradient(-45deg, #f0f0f0 25%, transparent 25%), 
+                linear-gradient(45deg, transparent 75%, #f0f0f0 75%),
+                linear-gradient(-45deg, transparent 75%, #f0f0f0 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+        }
+
+        .fill-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        /* 全屏模态 */
+        .fullscreen-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: rgba(0, 0, 0, 0.9);
+            z-index: 9999;
+            display: flex; 
+            flex-direction: column;
+            align-items: center; 
+            justify-content: center; 
+            cursor: zoom-out;
+            animation: fadeIn 0.2s ease;
+        }
+        .fullscreen-modal canvas {
+            max-width: 95vw;
+            max-height: 95vh;
+            width: auto !important;
+            height: auto !important;
+            object-fit: contain; 
+            margin: auto; 
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+        .progress-track { background: #E5E5EA; border-radius: 10px; height: 8px; overflow: hidden; margin: 10px 0; }
+        .progress-fill { background: var(--primary); height: 100%; width: 0%; transition: width 0.2s; }
+
+        input[type="range"] { -webkit-appearance: none; width: 100%; height: 6px; background: #E5E5EA; border-radius: 3px; outline: none; margin: 10px 0; }
+        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; background: white; box-shadow: 0 2px 6px rgba(0,0,0,0.2); border-radius: 50%; cursor: pointer; }
+        input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--primary); }
     </style>
 </head>
 <body>
 
-    <div class="card">
-        <div class="header">
-            <h2>🎨 ESP32 Robot Twin</h2>
-            <span id="connectionBadge" class="badge">未连接</span>
+    <div class="navbar px-4 py-3 mb-4">
+        <div class="max-w-md flex justify-between items-center mb-2">
+            <h1 class="text-lg text-main flex items-center gap-2">🎨 Robot Studio</h1>
+            <button id="connectBtn" onclick="toggleConnection()" class="btn-outline" style="width: auto; border-radius: 18px;">
+                <span id="btIcon">📡</span> <span id="btText">未连接</span>
+            </button>
         </div>
+        <div id="status" class="max-w-md text-center truncate">准备就绪</div>
+    </div>
 
-        <div class="canvas-container">
-            <canvas id="preview"></canvas>
-        </div>
+    <div class="max-w-md px-4">
 
-        <div id="progressContainer" class="progress-bar">
-            <div id="progressFill" class="progress-fill"></div>
-        </div>
-
-        <div id="status">准备就绪，请连接设备</div>
-
-        <button id="connectBtn" class="btn" onclick="toggleConnection()">📡 连接蓝牙设备</button>
-        
-        <input type="file" id="fileInput" accept=".gcode,.txt,.nc,.py,text/*,*/*" style="display:none" onchange="handleFileSelect(this.files[0])">
-        <button id="loadBtn" class="btn btn-outline" onclick="document.getElementById('fileInput').click()" disabled>📂 1. 加载 G-Code</button>
-        <button id="uploadBtn" class="btn" onclick="startUploadAndPrint()" disabled>▶️ 2. 上传文件</button>
-
-        <button id="controlBtn" class="btn" onclick="toggleDrawing()" disabled>▶ 开始绘画</button>
-
-        <div class="btn-group">
-            <button class="btn btn-outline" onclick="toggleDebug()">🛠 调试</button>
-        </div>
-
-        <div id="debugPanel" class="debug-panel">
-            <div class="toggle-row">
-                <input type="checkbox" id="turboToggle" onchange="toggleTurbo()">
-                <label for="turboToggle">🚀 极速仿真 (Turbo Mode)</label>
+        <div class="card">
+            <div class="flex justify-between items-center mb-3">
+                <h2 class="text-sm font-bold text-sub uppercase">STEP 1. 制作 G-Code</h2>
             </div>
-            <div class="btn-group">
-                <button class="btn btn-outline" onclick="sendCommand('CMD:SERVO_FWD')">⬇ 落笔</button>
-                <button class="btn btn-outline" onclick="sendCommand('CMD:SERVO_REV')">⬆ 抬笔</button>
+            
+            <div class="relative upload-area mb-4">
+                <input type="file" id="imageInput" accept="image/*" class="absolute inset-0 w-full h-full z-10 opacity-0">
+                <span class="upload-icon">📸</span>
+                <span class="upload-text">点击上传图片</span>
+                <span class="upload-sub">(支持拍照/相册)</span>
             </div>
-            <div style="margin-top:10px; font-size:0.8rem; color:#999;">UUID: ...34fb</div>
+
+            <details class="mb-4">
+                <summary class="advanced-summary">
+                    <span>⚙️ 高级参数设置</span>
+                    <span class="summary-arrow">▼</span>
+                </summary>
+                <div class="p-3 pt-4 space-y-4 bg-gray-50 rounded-b-xl border-x border-b border-gray-200">
+                    <div class="flex items-center justify-between">
+                        <label class="text-sm">修复实心区域 (空心化)</label>
+                        <input type="checkbox" id="hollowSolids" checked>
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-xs mb-1"><span>线条阈值</span><span id="thresholdVal">128</span></div>
+                        <input type="range" id="threshold" min="0" max="255" value="128">
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-xs mb-1"><span>路径平滑 (拖动生效)</span><span id="smoothingVal">2.0</span></div>
+                        <input type="range" id="smoothing" min="0" max="10" step="0.5" value="2.0">
+                    </div>
+                </div>
+            </details>
+
+            <div id="imgContainer" class="ratio-container checkerboard-bg mb-4">
+                <canvas id="imgCanvas" class="fill-canvas"></canvas>
+                <div id="imgPlaceholder" class="absolute inset-0 flex items-center justify-center text-xs text-sub pointer-events-none">图片预览</div>
+            </div>
+
+            <button id="processBtn" onclick="processImage()" class="btn btn-primary" disabled>
+                <span id="loader" class="loader hidden"></span>
+                <span id="processBtnText">✨ 转换图片为路径</span>
+            </button>
+            <div id="pathStats" class="text-center text-xs mt-2" style="min-height: 1rem;"></div>
         </div>
+
+        <div class="card">
+            <h2 class="text-sm font-bold text-sub uppercase mb-3">STEP 2. 绘画控制</h2>
+            
+            <div class="progress-track">
+                <div id="progressFill" class="progress-fill"></div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 mb-4">
+                <button id="uploadBtn" onclick="startUploadAndPrint()" class="btn btn-primary col-span-2" disabled>
+                    📡 发送任务
+                </button>
+                <button id="controlBtn" onclick="toggleDrawing()" class="btn btn-success col-span-2 hidden">
+                    ▶ 开始绘画
+                </button>
+            </div>
+
+            <div id="twinContainer" class="ratio-container">
+                <canvas id="twinCanvas" class="fill-canvas"></canvas>
+                <div class="absolute bottom-2 right-2 text-xs text-sub pointer-events-none">Digital Twin</div>
+            </div>
+        </div>
+
+        <div class="flex justify-center mb-2">
+            <button onclick="toggleDebug()" class="text-xs text-sub underline opacity-50 hover:opacity-100 bg-transparent border-none cursor-pointer">
+                🛠 打开调试面板
+            </button>
+        </div>
+
+        <div id="debugPanel" class="hidden bg-white shadow-sm p-4 rounded-xl border border-gray-200 mb-6 mx-auto max-w-md">
+            <div class="flex items-center justify-between mb-3 pb-2 border-b border-gray-200">
+                <span class="text-xs font-bold text-sub">调试控制</span>
+                <label class="flex items-center gap-1 cursor-pointer text-xs text-blue-600">
+                    <input type="checkbox" id="turboToggle" onchange="toggleTurbo()">
+                    🚀 极速仿真
+                </label>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+                <button class="btn-outline" onclick="sendCommand('CMD:SERVO_FWD')">⬇ 落笔</button>
+                <button class="btn-outline" onclick="sendCommand('CMD:SERVO_REV')">⬆ 抬笔</button>
+            </div>
+            <div class="mt-2 text-xs text-gray-400 text-center break-all">
+                UUID: ...34fb
+            </div>
+        </div>
+
+        <div class="text-center text-xs text-sub pb-2">Robot Studio BLE 5.0</div>
+    </div>
+
+    <div id="fullscreenModal" class="fullscreen-modal hidden" onclick="toggleFullscreen(false)">
     </div>
 
     <script>
+        // --- 全局配置 ---
         const SERVICE_UUID   = '000000ff-0000-1000-8000-00805f9b34fb';
         const CHAR_CMD_UUID  = '0000ff01-0000-1000-8000-00805f9b34fb';
         const CHAR_STAT_UUID = '0000ff02-0000-1000-8000-00805f9b34fb';
         
-        let device, server, service, charCmd, charStat;
-        let gcodeContent = "";
-        let autoScale = 1.0;
-        let canvas, ctx, width, height;
+        let device, charCmd, charStat;
         let isConnected = false;
         
-        let allParsedLines = [];
-        let lastDrawnIndex = 0;
-        // [Bug Fix] 新增坐标系模式标志
-        let isM3Mode = false;
+        let originalImage = null, binaryData = null;
+        let rawPaths = [], optimizedPaths = [];
+        let generatedGcode = ""; 
+        let imgWidth = 0, imgHeight = 0;
         
+        let allParsedLines = [], lastDrawnIndex = 0;
+        let isM3Mode = true, autoScale = 1.0;
+        
+        const imgCanvas = document.getElementById('imgCanvas');
+        const imgCtx = imgCanvas.getContext('2d');
+        const twinCanvas = document.getElementById('twinCanvas');
+        const twinCtx = twinCanvas.getContext('2d');
+
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('service-worker.js').catch(console.error);
+            if (window.location.protocol.startsWith('http')) {
+                navigator.serviceWorker.register('service-worker.js').catch(console.error);
+            }
         }
 
         window.onload = () => {
-            canvas = document.getElementById('preview');
-            ctx = canvas.getContext('2d');
-            const dpr = window.devicePixelRatio || 1;
-            const rect = canvas.parentElement.getBoundingClientRect();
-            canvas.width = rect.width * dpr;
-            canvas.height = rect.height * dpr;
-            ctx.scale(dpr, dpr);
-            width = rect.width;
-            height = rect.height;
-            resetCanvas();
+            resizeTwinCanvas();
+            window.addEventListener('resize', resizeTwinCanvas);
         };
 
+        // --- 全屏逻辑 ---
+        const fullscreenModal = document.getElementById('fullscreenModal');
+        const imgContainer = document.getElementById('imgContainer');
+        let isFullscreen = false;
+
+        imgCanvas.addEventListener('click', () => {
+            if (originalImage && !isFullscreen) toggleFullscreen(true);
+        });
+
+        function toggleFullscreen(show) {
+            isFullscreen = show;
+            if (show) {
+                fullscreenModal.classList.remove('hidden');
+                fullscreenModal.appendChild(imgCanvas);
+            } else {
+                fullscreenModal.classList.add('hidden');
+                imgContainer.appendChild(imgCanvas);
+            }
+        }
+
+        function resizeTwinCanvas() {
+            const container = isFullscreen ? fullscreenModal : imgContainer;
+            const rect = document.getElementById('twinContainer').getBoundingClientRect();
+            
+            const dpr = window.devicePixelRatio || 1;
+            twinCanvas.width = rect.width * dpr;
+            twinCanvas.height = rect.height * dpr;
+            twinCtx.scale(dpr, dpr);
+            twinCanvas.logicalWidth = rect.width;
+            twinCanvas.logicalHeight = rect.height;
+            
+            if(generatedGcode) drawTwinPreview(generatedGcode, '#e0e0e0');
+        }
+
+        // --- 蓝牙逻辑 ---
         async function toggleConnection() {
-            if (isConnected) disconnectBLE();
-            else connectBLE();
+            if (isConnected) disconnectBLE(); else connectBLE();
         }
 
         async function connectBLE() {
-            updateStatus("正在搜索设备...", "blue");
+            if (!navigator.bluetooth) {
+                const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+                if (isIOS) alert("iOS请使用 Bluefy 浏览器");
+                else updateStatus("当前浏览器不支持蓝牙", "red");
+                return;
+            }
+            updateStatus("正在搜索...", "blue");
             try {
                 device = await navigator.bluetooth.requestDevice({
                     filters: [{ services: [SERVICE_UUID] }],
                     optionalServices: [SERVICE_UUID]
                 });
-
                 device.addEventListener('gattserverdisconnected', onDisconnected);
-                updateStatus("正在连接 GATT...", "blue");
-                
-                server = await device.gatt.connect();
-                service = await server.getPrimaryService(SERVICE_UUID);
+                const server = await device.gatt.connect();
+                const service = await server.getPrimaryService(SERVICE_UUID);
                 charCmd = await service.getCharacteristic(CHAR_CMD_UUID);
                 charStat = await service.getCharacteristic(CHAR_STAT_UUID);
-
                 await charStat.startNotifications();
                 charStat.addEventListener('characteristicvaluechanged', handleStatusUpdate);
-
                 onConnected();
-            } catch (error) {
-                let msg = error.message || error.toString();
-                if (msg.includes("User cancelled")) msg = "用户取消操作";
-                updateStatus("未连接：" + msg, "red");
+            } catch (e) {
+                if(!e.message.includes("cancelled")) updateStatus("连接失败: " + e.message, "red");
             }
         }
 
@@ -157,299 +492,505 @@
 
         function onConnected() {
             isConnected = true;
-            document.getElementById('connectionBadge').innerText = "已连接";
-            document.getElementById('connectionBadge').classList.add("connected");
-            document.getElementById('connectBtn').innerText = "❌ 断开连接";
-            document.getElementById('connectBtn').classList.add("btn-outline");
-            
-            document.getElementById('loadBtn').disabled = false;
-            if (gcodeContent) document.getElementById('uploadBtn').disabled = false;
-            
+            document.getElementById('btText').innerText = "已连接";
+            document.getElementById('btIcon').innerText = "✅";
+            const btn = document.getElementById('connectBtn');
+            btn.style.borderColor = "var(--success)";
+            btn.style.color = "var(--success)";
             updateStatus("设备已就绪", "green");
-            toggleTurbo(); 
-            twinX = 0; twinY = 0;
+            toggleTurbo();
+            if (generatedGcode) document.getElementById('uploadBtn').disabled = false;
         }
 
         function onDisconnected() {
             isConnected = false;
-            document.getElementById('connectionBadge').innerText = "未连接";
-            document.getElementById('connectionBadge').classList.remove("connected");
-            document.getElementById('connectBtn').innerText = "📡 连接蓝牙设备";
-            document.getElementById('connectBtn').classList.remove("btn-outline");
-            document.getElementById('loadBtn').disabled = true;
+            document.getElementById('btText').innerText = "连接设备";
+            document.getElementById('btIcon').innerText = "📡";
+            const btn = document.getElementById('connectBtn');
+            btn.style.borderColor = "#E5E5EA";
+            btn.style.color = "var(--primary)";
+            
+            setBreathing(false);
+            
             document.getElementById('uploadBtn').disabled = true;
-            document.getElementById('controlBtn').disabled = true;
-            document.getElementById('controlBtn').innerText = "▶ 开始绘画";
-            document.getElementById('controlBtn').className = "btn";
-            updateStatus("设备已断开", "orange");
+            document.getElementById('controlBtn').classList.add('hidden');
+            document.getElementById('uploadBtn').classList.remove('hidden');
+            updateStatus("设备已断开", "red");
         }
 
-        async function handleFileSelect(file) {
+        // --- 图像处理 ---
+        document.getElementById('imageInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
             if (!file) return;
-            const text = await file.text();
-            gcodeContent = text;
-            
-            // [Bug Fix] 检测文件是否为 M3 模式 (决定是否翻转 Y 轴)
-            isM3Mode = text.includes('M3') || text.includes('M5');
-            
-            calculateScale(text);
-            parseAllLines(text);
-            resetCanvas();
-            drawPreview(text, '#e0e0e0');
-            lastDrawnIndex = 0;
-            document.getElementById('uploadBtn').disabled = !isConnected;
-            updateStatus(`已加载: ${file.name} (${(file.size/1024).toFixed(1)}KB)`, "black");
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                const img = new Image();
+                img.onload = function() {
+                    resetUIForNewImage();
+
+                    const maxSize = 800;
+                    let w = img.width, h = img.height;
+                    if (w > maxSize || h > maxSize) {
+                        const ratio = Math.min(maxSize / w, maxSize / h);
+                        w = Math.round(w * ratio); h = Math.round(h * ratio);
+                    }
+                    imgWidth = w; imgHeight = h;
+                    
+                    const aspectRatio = (h / w) * 100 + "%";
+                    document.getElementById('imgContainer').style.paddingTop = aspectRatio;
+                    document.getElementById('twinContainer').style.paddingTop = aspectRatio;
+
+                    imgCanvas.width = w; imgCanvas.height = h;
+                    imgCtx.drawImage(img, 0, 0, w, h);
+                    originalImage = imgCtx.getImageData(0, 0, w, h);
+                    
+                    document.getElementById('imgPlaceholder').style.display = 'none';
+                    
+                    const pBtn = document.getElementById('processBtn');
+                    pBtn.disabled = false;
+                    pBtn.classList.remove('btn-success');
+                    pBtn.classList.add('btn-primary');
+                    document.getElementById('processBtnText').innerText = "✨ 转换图片为路径";
+                    
+                    document.getElementById('pathStats').innerText = `图片: ${w}x${h}px`;
+                    generatedGcode = "";
+                    rawPaths = []; 
+                    
+                    document.getElementById('uploadBtn').disabled = true;
+                    updateBinaryPreview();
+                    
+                    setTimeout(resizeTwinCanvas, 100);
+                }
+                img.src = evt.target.result;
+            }
+            reader.readAsDataURL(file);
+        });
+
+        function resetUIForNewImage() {
+            document.getElementById('controlBtn').classList.add('hidden'); 
+            document.getElementById('uploadBtn').classList.remove('hidden'); 
+            document.getElementById('uploadBtn').disabled = true; 
+            document.getElementById('uploadBtn').innerText = "📡 发送任务"; 
+            document.getElementById('progressFill').style.width = "0%"; 
+            setBreathing(false); 
+            updateStatus("图片已加载", "black");
         }
 
-        async function startUploadAndPrint() {
-            if (!gcodeContent || !charCmd) return;
+        document.getElementById('threshold').addEventListener('input', (e) => {
+            document.getElementById('thresholdVal').innerText = e.target.value;
+            if(originalImage) updateBinaryPreview();
+        });
 
-            document.getElementById('uploadBtn').disabled = true;
-            document.getElementById('progressContainer').style.display = 'block';
+        document.getElementById('smoothing').addEventListener('input', (e) => {
+            document.getElementById('smoothingVal').innerText = e.target.value;
+            if(rawPaths && rawPaths.length > 0) {
+                updatePathsAndGcode();
+            }
+        });
+
+        function updateBinaryPreview() {
+            if(!originalImage) return;
+            const th = parseInt(document.getElementById('threshold').value);
+            const output = imgCtx.createImageData(imgWidth, imgHeight);
+            const d = originalImage.data; const out = output.data;
+            for(let i=0; i<d.length; i+=4) {
+                const gray = 0.34*d[i] + 0.5*d[i+1] + 0.16*d[i+2];
+                const val = gray < th ? 0 : 255;
+                out[i]=out[i+1]=out[i+2]=val; out[i+3]=255;
+            }
+            imgCtx.putImageData(output, 0, 0);
+        }
+
+        async function processImage() {
+            if(!originalImage) return;
+            const btn = document.getElementById('processBtn');
+            const loader = document.getElementById('loader');
+            const txt = document.getElementById('processBtnText');
+            
+            btn.disabled = true;
+            loader.classList.remove('hidden');
+            txt.innerText = "正在运算...";
+            
+            setTimeout(() => {
+                try {
+                    const th = parseInt(document.getElementById('threshold').value);
+                    const hollow = document.getElementById('hollowSolids').checked;
+
+                    prepareBinaryData(th);
+                    if(hollow) hollowSolids();
+                    skeletonize();
+                    tracePaths();
+                    
+                    updatePathsAndGcode();
+                    
+                    btn.classList.remove('btn-primary');
+                    btn.classList.add('btn-success');
+                    updateStatus("转换成功，准备发送", "green");
+
+                } catch(e) {
+                    console.error(e);
+                    updateStatus("算法错误", "red");
+                } finally {
+                    btn.disabled = false;
+                    loader.classList.add('hidden');
+                    txt.innerText = "✨ 转换完成";
+                }
+            }, 50);
+        }
+
+        function updatePathsAndGcode() {
+            const sm = parseFloat(document.getElementById('smoothing').value);
+            const sorted = sortAndMergePaths(rawPaths);
+            optimizedPaths = sorted.map(p => simplifyPathRDP(p, sm));
+            generateGcodeInternal();
+            const pts = optimizedPaths.reduce((a,p)=>a+p.length,0);
+            document.getElementById('pathStats').innerText = `路径: ${optimizedPaths.length} | 节点: ${pts}`;
+            resizeTwinCanvas();
+            if(isConnected) document.getElementById('uploadBtn').disabled = false;
+        }
+
+        // --- 核心算法 ---
+        function prepareBinaryData(th) {
+            binaryData = new Int8Array(imgWidth*imgHeight);
+            const d = originalImage.data;
+            for(let i=0; i<imgWidth*imgHeight; i++) {
+                const val = (0.34*d[i*4]+0.5*d[i*4+1]+0.16*d[i*4+2]);
+                binaryData[i] = val < th ? 1 : 0;
+            }
+        }
+        function getPixel(x,y){ if(x<0||x>=imgWidth||y<0||y>=imgHeight)return 0; return binaryData[y*imgWidth+x]; }
+        
+        function hollowSolids() {
+            const t = new Int8Array(binaryData);
+            for(let y=1; y<imgHeight-1; y++) {
+                for(let x=1; x<imgWidth-1; x++) {
+                    const idx = y*imgWidth+x;
+                    if(t[idx] && t[idx-1] && t[idx+1] && t[idx-imgWidth] && t[idx+imgWidth]) binaryData[idx]=0;
+                }
+            }
+        }
+
+        function skeletonize() {
+            let changed=true; const rem=[];
+            while(changed) {
+                changed=false;
+                for(let pass=0; pass<2; pass++) {
+                    rem.length=0;
+                    for(let y=1; y<imgHeight-1; y++){
+                        for(let x=1; x<imgWidth-1; x++){
+                            if(getPixel(x,y)){
+                                const p2=getPixel(x,y-1), p3=getPixel(x+1,y-1), p4=getPixel(x+1,y);
+                                const p5=getPixel(x+1,y+1), p6=getPixel(x,y+1), p7=getPixel(x-1,y+1);
+                                const p8=getPixel(x-1,y), p9=getPixel(x-1,y-1);
+                                const A = (p2==0&&p3==1)+(p3==0&&p4==1)+(p4==0&&p5==1)+(p5==0&&p6==1)+(p6==0&&p7==1)+(p7==0&&p8==1)+(p8==0&&p9==1)+(p9==0&&p2==1);
+                                const B = p2+p3+p4+p5+p6+p7+p8+p9;
+                                const m1 = pass==0 ? (p2*p4*p6) : (p2*p4*p8);
+                                const m2 = pass==0 ? (p4*p6*p8) : (p2*p6*p8);
+                                if(A==1 && B>=2 && B<=6 && m1==0 && m2==0) rem.push(y*imgWidth+x);
+                            }
+                        }
+                    }
+                    if(rem.length>0){ changed=true; for(let i=0; i<rem.length; i++) binaryData[rem[i]]=0; }
+                }
+            }
+        }
+
+        function tracePaths() {
+            rawPaths=[]; const visited=new Int8Array(imgWidth*imgHeight);
+            for(let y=0; y<imgHeight; y++){
+                for(let x=0; x<imgWidth; x++){
+                    const idx=y*imgWidth+x;
+                    if(binaryData[idx] && !visited[idx]) {
+                        let path=[]; let cx=x, cy=y;
+                        while(true) {
+                            path.push({x:cx,y:cy}); visited[cy*imgWidth+cx]=1; let found=false;
+                            const ns=[{dx:1,dy:0},{dx:1,dy:1},{dx:0,dy:1},{dx:-1,dy:1},{dx:-1,dy:0},{dx:-1,dy:-1},{dx:0,dy:-1},{dx:1,dy:-1}];
+                            for(let n of ns) {
+                                const nx=cx+n.dx, ny=cy+n.dy;
+                                if(nx>=0&&nx<imgWidth&&ny>=0&&ny<imgHeight) {
+                                    if(binaryData[ny*imgWidth+nx] && !visited[ny*imgWidth+nx]) { cx=nx; cy=ny; found=true; break; }
+                                }
+                            }
+                            if(!found) break;
+                        }
+                        if(path.length>2) rawPaths.push(path);
+                    }
+                }
+            }
+        }
+
+        function sortAndMergePaths(paths) {
+            if(paths.length===0) return [];
+            let rem = paths.map(p=>[...p]), sorted = [], curr = rem.shift();
+            while(true) {
+                let best=-1, minD=Infinity, rev=false, tip=curr[curr.length-1];
+                for(let i=0; i<rem.length; i++) {
+                    const start=rem[i][0], end=rem[i][rem[i].length-1];
+                    const d1=(tip.x-start.x)**2+(tip.y-start.y)**2;
+                    const d2=(tip.x-end.x)**2+(tip.y-end.y)**2;
+                    if(d1<minD){minD=d1; best=i; rev=false;}
+                    if(d2<minD){minD=d2; best=i; rev=true;}
+                }
+                if(best===-1) {
+                    sorted.push(curr);
+                    if(rem.length>0) { curr=rem.shift(); continue; } else break;
+                }
+                if(minD<=5) {
+                    const next=rem[best]; if(rev) next.reverse();
+                    curr.push(...next); rem.splice(best,1);
+                } else {
+                    sorted.push(curr);
+                    const next=rem[best]; if(rev) next.reverse();
+                    curr=next; rem.splice(best,1);
+                }
+            }
+            return sorted;
+        }
+
+        function perpendicularDistance(p, lineStart, lineEnd) {
+            const dx = lineEnd.x - lineStart.x;
+            const dy = lineEnd.y - lineStart.y;
+            const lenSq = dx * dx + dy * dy;
+            if (lenSq === 0) {
+                return Math.sqrt((p.x - lineStart.x)**2 + (p.y - lineStart.y)**2);
+            }
+            let t = ((p.x - lineStart.x) * dx + (p.y - lineStart.y) * dy) / lenSq;
+            if (t < 0) t = 0; else if (t > 1) t = 1;
+            const projX = lineStart.x + t * dx;
+            const projY = lineStart.y + t * dy;
+            return Math.sqrt((p.x - projX)**2 + (p.y - projY)**2);
+        }
+
+        function simplifyPathRDP(path, epsilon) {
+            if (path.length < 3) return path; 
+            let dmax = 0;
+            let index = 0;
+            const end = path.length - 1;
+            for (let i = 1; i < end; i++) {
+                const d = perpendicularDistance(path[i], path[0], path[end]);
+                if (d > dmax) {
+                    index = i;
+                    dmax = d;
+                }
+            }
+            if (dmax > epsilon) {
+                const results1 = simplifyPathRDP(path.slice(0, index + 1), epsilon);
+                const results2 = simplifyPathRDP(path.slice(index, path.length), epsilon);
+                return results1.slice(0, results1.length - 1).concat(results2);
+            } else {
+                return [path[0], path[end]];
+            }
+        }
+
+        function generateGcodeInternal() {
+            const WORK_WIDTH = 100.0; 
+            const scale = WORK_WIDTH / Math.max(imgWidth, 1);
+            let g = "G90\nM5\n";
+            optimizedPaths.forEach(p => {
+                if(p.length===0) return;
+                const sx=(p[0].x*scale).toFixed(2), sy=((imgHeight-p[0].y)*scale).toFixed(2);
+                g+=`G0 X${sx} Y${sy}\nM3 S1000\n`;
+                for(let i=1; i<p.length; i++) {
+                    const px=(p[i].x*scale).toFixed(2), py=((imgHeight-p[i].y)*scale).toFixed(2);
+                    g+=`G1 X${px} Y${py}\n`;
+                }
+                g+=`M5\n`;
+            });
+            g+="G0 X0 Y0\n";
+            generatedGcode = g;
+            parseAllLines(g);
+            drawTwinPreview(g, '#e0e0e0');
+        }
+
+        // --- 传输 ---
+        async function startUploadAndPrint() {
+            if(!generatedGcode || !charCmd) return;
+            const btn = document.getElementById('uploadBtn');
+            btn.disabled = true;
+            btn.innerText = "⏳ 传输中...";
             lastDrawnIndex = 0;
+            
+            // [Bug 2] 开始呼吸
+            setBreathing(true);
             
             try {
-                updateStatus("初始化文件系统...", "blue");
+                updateStatus("正在初始化...", "blue");
                 await sendCommand("CMD:NEWFILE");
-
-                const lines = gcodeContent.split('\n');
-                const totalLines = lines.length;
-                let chunk = "";
-                const CHUNK_LIMIT = 350; 
-
-                for (let i = 0; i < totalLines; i++) {
+                
+                const lines = generatedGcode.split('\n');
+                let chunk = ""; const CHUNK=150; 
+                
+                for(let i=0; i<lines.length; i++) {
                     let line = lines[i].trim();
-                    if (line.length === 0 || line.startsWith(';')) continue;
-                    
+                    if(!line) continue;
                     line += "\n";
-                    
-                    if (chunk.length + line.length > CHUNK_LIMIT) {
+                    if(chunk.length + line.length > CHUNK) {
                         await sendCommand(chunk);
                         chunk = "";
-                        
-                        if (i % 20 === 0) {
-                            const pct = Math.round((i / totalLines) * 100);
-                            document.getElementById('progressFill').style.width = pct + "%";
-                            updateStatus(`极速上传中... ${pct}% (${i}/${totalLines}行)`, "blue");
-                            await new Promise(r => setTimeout(r, 5));
+                        if(i%5===0) { 
+                            const pct = Math.round((i/lines.length)*100);
+                            document.getElementById('progressFill').style.width = pct+"%";
+                            updateStatus(`上传中: ${pct}%`, "blue");
+                            await new Promise(r=>setTimeout(r, 5));
                         }
                     }
                     chunk += line;
                 }
-                
-                if (chunk.length > 0) {
-                    await sendCommand(chunk);
-                }
+                if(chunk) await sendCommand(chunk);
                 
                 document.getElementById('progressFill').style.width = "100%";
-                updateStatus("上传成功 (100%)，请点击开始", "green");
+                updateStatus("上传完成，请开始", "green");
                 
-                document.getElementById('uploadBtn').disabled = false;
-                const ctrlBtn = document.getElementById('controlBtn');
-                ctrlBtn.disabled = false;
-                ctrlBtn.innerText = "▶ 开始绘画";
-                ctrlBtn.className = "btn btn-green"; 
+                btn.classList.add('hidden');
+                document.getElementById('controlBtn').classList.remove('hidden');
                 
-            } catch (e) {
-                updateStatus("上传中断: " + e.message, "red");
-                document.getElementById('uploadBtn').disabled = false;
+            } catch(e) {
+                updateStatus("上传失败", "red");
+                setBreathing(false); // 失败停止
+                btn.disabled = false;
+                btn.innerText = "📡 重试";
             }
+        }
+
+        // --- 辅助 ---
+        function setBreathing(enable) {
+            const st = document.getElementById('status');
+            if(enable) st.classList.add('status-breathing');
+            else st.classList.remove('status-breathing');
         }
 
         async function toggleDrawing() {
             const btn = document.getElementById('controlBtn');
-            const btnText = btn.innerText;
-
-            if (btnText.includes("开始") || btnText.includes("继续")) {
+            if(btn.innerText.includes("开始") || btn.innerText.includes("继续") || btn.innerText.includes("再次")) {
                 await sendCommand("CMD:START");
                 btn.innerText = "⏸ 暂停";
-                btn.className = "btn btn-stop";
-                updateStatus("正在绘画...", "green");
+                btn.className = "btn btn-danger col-span-2";
+                updateStatus("绘画中...", "green");
+                setBreathing(true); // [Bug 2] 绘画中呼吸
             } else {
                 await sendCommand("CMD:STOP");
                 btn.innerText = "▶ 继续";
-                btn.className = "btn btn-green";
+                btn.className = "btn btn-success col-span-2";
                 updateStatus("已暂停", "orange");
+                setBreathing(false); // [Bug 2] 暂停停止呼吸
             }
         }
 
         async function toggleTurbo() {
-            if (!isConnected) return;
-            const isTurbo = document.getElementById('turboToggle').checked;
-            await sendCommand(isTurbo ? "CMD:TURBO_ON" : "CMD:TURBO_OFF");
+            if(!isConnected) return;
+            const on = document.getElementById('turboToggle').checked;
+            await sendCommand(on ? "CMD:TURBO_ON" : "CMD:TURBO_OFF");
         }
 
         async function sendCommand(cmd) {
-            if (!charCmd) return;
-            const encoder = new TextEncoder();
-            await charCmd.writeValue(encoder.encode(cmd));
+            if(!charCmd) return;
+            const enc = new TextEncoder();
+            await charCmd.writeValue(enc.encode(cmd));
         }
 
-        function handleStatusUpdate(event) {
-            const value = event.target.value;
-            const decoder = new TextDecoder();
-            const jsonStr = decoder.decode(value);
-            
+        function handleStatusUpdate(e) {
+            const val = e.target.value;
+            const dec = new TextDecoder();
+            const str = dec.decode(val);
             try {
-                const data = JSON.parse(jsonStr);
+                const d = JSON.parse(str);
                 const btn = document.getElementById('controlBtn');
                 
-                if (data.s === 1) { 
-                    if (!btn.innerText.includes("暂停")) {
-                        btn.innerText = "⏸ 暂停";
-                        btn.className = "btn btn-stop";
-                        btn.disabled = false;
+                if(d.s === 1) { // Running
+                    if(!btn.innerText.includes("暂停")) {
+                        btn.innerText = "⏸ 暂停"; btn.className = "btn btn-danger col-span-2";
+                        btn.disabled = false; btn.classList.remove('hidden');
+                        document.getElementById('uploadBtn').classList.add('hidden');
+                        setBreathing(true);
                     }
                     const total = allParsedLines.length;
-                    const pct = total > 0 ? Math.round((data.i / total) * 100) : 0;
-                    updateStatus(`绘制中: ${pct}% (行 ${data.i})`, "green");
-                    document.getElementById('progressFill').style.width = pct + "%";
-                } else if (data.s === 2) { 
-                     if (!btn.innerText.includes("继续")) {
-                        btn.innerText = "▶ 继续";
-                        btn.className = "btn btn-green";
-                     }
-                } else if (data.s === 3) { 
-                    updateStatus("绘制完成! 🎉", "green");
-                    btn.innerText = "▶ 开始绘画"; 
-                    btn.className = "btn btn-green";
-                    btn.disabled = false; 
+                    const pct = total>0 ? Math.round((d.i/total)*100) : 0;
+                    document.getElementById('progressFill').style.width = pct+"%";
+                    updateStatus(`绘画中: ${pct}%`, "green");
+                } else if(d.s === 2) { // Paused
+                    if(!btn.innerText.includes("继续")) {
+                        btn.innerText = "▶ 继续"; btn.className = "btn btn-success col-span-2";
+                        setBreathing(false);
+                    }
+                } else if(d.s === 3) { // Finished
+                    updateStatus("完成! 🎉", "green");
+                    btn.innerText = "▶ 再次绘画"; btn.className = "btn btn-success col-span-2";
+                    setBreathing(false);
                 }
-
-                if (data.i > lastDrawnIndex) {
-                    drawSegment(lastDrawnIndex, data.i);
-                    lastDrawnIndex = data.i;
+                if(d.i > lastDrawnIndex) {
+                    drawSegment(lastDrawnIndex, d.i);
+                    lastDrawnIndex = d.i;
                 }
-
-            } catch (e) {
-                console.warn("JSON Error");
-            }
+            } catch(err){}
         }
 
+        // --- 孪生绘图 ---
         function parseAllLines(text) {
             allParsedLines = [];
-            let curX = 0, curY = 0, isDown = false;
+            let cx=0, cy=0, down=false;
             
-            text.split('\n').forEach((line, index) => {
-                if (line.includes('M3')) isDown = true;
-                if (line.includes('M5')) isDown = false;
+            const container = document.getElementById('twinContainer');
+            const cw = container.clientWidth || 300;
+            const ch = container.clientHeight || 300;
+            
+            const scale = (cw*0.9)/100.0, ox = cw*0.05, oy = ch*0.05;
+
+            text.split('\n').forEach(l => {
+                if(l.includes('M3')) down=true; if(l.includes('M5')) down=false;
+                const zm = l.match(/Z([-\d.]+)/); if(zm) down=(parseFloat(zm[1])<=0);
+                const xm = l.match(/X([-\d.]+)/), ym = l.match(/Y([-\d.]+)/);
                 
-                const zMatch = line.match(/Z([-\d.]+)/);
-                if (zMatch) {
-                    isDown = (parseFloat(zMatch[1]) <= 0);
-                }
+                const gx = xm?parseFloat(xm[1]):cx;
+                const gy = ym?parseFloat(ym[1]):cy;
                 
-                const xMatch = line.match(/X([-\d.]+)/);
-                const yMatch = line.match(/Y([-\d.]+)/);
+                const tx = gx*scale + ox;
+                const ty = ch - (gy*scale) - oy;
                 
-                if (xMatch) curX = parseFloat(xMatch[1]) * autoScale;
-                if (yMatch) curY = parseFloat(yMatch[1]) * autoScale;
-                
-                allParsedLines.push({
-                    x: curX,
-                    y: curY,
-                    isDown: isDown,
-                    valid: (line.includes('G0') || line.includes('G1'))
-                });
+                allParsedLines.push({x:tx, y:ty, down:down, valid:(l.includes('G0')||l.includes('G1'))});
+                if(xm) cx=gx; if(ym) cy=gy;
             });
         }
 
-        // [Bug Fix] 孪生绘制逻辑：根据 isM3Mode 决定是否翻转 Y
-        function drawSegment(startIdx, endIdx) {
-            if (endIdx >= allParsedLines.length) endIdx = allParsedLines.length - 1;
-            
-            ctx.beginPath();
-            ctx.strokeStyle = '#007AFF'; 
-            ctx.lineWidth = 2;
-            
-            let startPoint = allParsedLines[startIdx];
-            if(!startPoint) return;
-            
-            let drawStartX = startPoint.x + 10;
-            // 核心修复点 1
-            let drawStartY = isM3Mode ? (height - (startPoint.y + 10)) : (startPoint.y + 10);
-            ctx.moveTo(drawStartX, drawStartY);
-
-            for (let i = startIdx + 1; i <= endIdx; i++) {
+        function drawTwinPreview(txt, col) {
+            twinCtx.clearRect(0,0,twinCanvas.width,twinCanvas.height);
+            twinCtx.lineCap='round'; twinCtx.lineJoin='round';
+            twinCtx.beginPath(); twinCtx.strokeStyle=col; twinCtx.lineWidth=1;
+            if(allParsedLines.length===0) return;
+            twinCtx.moveTo(allParsedLines[0].x, allParsedLines[0].y);
+            for(let i=1; i<allParsedLines.length; i++) {
                 const p = allParsedLines[i];
-                if (p.valid) {
-                    const drawX = p.x + 10;
-                    // 核心修复点 2
-                    const drawY = isM3Mode ? (height - (p.y + 10)) : (p.y + 10);
-                    
-                    if (p.isDown) ctx.lineTo(drawX, drawY);
-                    else ctx.moveTo(drawX, drawY);
+                if(p.valid) {
+                    if(p.down) twinCtx.lineTo(p.x, p.y); else twinCtx.moveTo(p.x, p.y);
                 }
             }
-            ctx.stroke();
+            twinCtx.stroke();
         }
 
-        function resetCanvas() {
-            ctx.clearRect(0, 0, width, height);
-            ctx.lineCap = "round";
-            ctx.lineJoin = "round";
-        }
-
-        function calculateScale(text) {
-            let maxX = 0, maxY = 0;
-            text.split('\n').forEach(line => {
-                const x = line.match(/X([-\d.]+)/);
-                const y = line.match(/Y([-\d.]+)/);
-                if (x) maxX = Math.max(maxX, parseFloat(x[1]));
-                if (y) maxY = Math.max(maxY, parseFloat(y[1]));
-            });
-            const padding = 20;
-            const availW = width - padding * 2;
-            const availH = height - padding * 2;
-            if (maxX > 0 && maxY > 0) {
-                autoScale = Math.min(availW / maxX, availH / maxY);
-            } else {
-                autoScale = 1.0;
-            }
-        }
-
-        // [Bug Fix] 预览绘制逻辑：根据 isM3Mode 决定是否翻转 Y
-        function drawPreview(text, color) {
-            ctx.beginPath();
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 1;
-            let curX = 0, curY = 0;
-            let isDown = false;
-
-            text.split('\n').forEach(line => {
-                if (line.includes('M3')) isDown = true;
-                if (line.includes('M5')) isDown = false;
-                
-                const zMatch = line.match(/Z([-\d.]+)/);
-                if (zMatch) isDown = (parseFloat(zMatch[1]) <= 0);
-
-                const xMatch = line.match(/X([-\d.]+)/);
-                const yMatch = line.match(/Y([-\d.]+)/);
-                
-                if (xMatch) curX = parseFloat(xMatch[1]) * autoScale;
-                if (yMatch) curY = parseFloat(yMatch[1]) * autoScale;
-                
-                const drawX = curX + 10;
-                // 核心修复点 3
-                const drawY = isM3Mode ? (height - (curY + 10)) : (curY + 10);
-
-                if (line.includes('G0') || line.includes('G1')) {
-                    if (isDown) ctx.lineTo(drawX, drawY);
-                    else ctx.moveTo(drawX, drawY);
+        function drawSegment(start, end) {
+            if(end>=allParsedLines.length) end=allParsedLines.length-1;
+            twinCtx.beginPath(); twinCtx.strokeStyle='#007AFF'; twinCtx.lineWidth=2;
+            let sp = allParsedLines[start]; if(!sp) return;
+            twinCtx.moveTo(sp.x, sp.y);
+            for(let i=start+1; i<=end; i++) {
+                const p = allParsedLines[i];
+                if(p.valid) {
+                    if(p.down) twinCtx.lineTo(p.x, p.y); else twinCtx.moveTo(p.x, p.y);
                 }
-            });
-            ctx.stroke();
+            }
+            twinCtx.stroke();
         }
 
-        function updateStatus(msg, color="black") {
+        function updateStatus(msg, color) {
             const el = document.getElementById('status');
             el.innerText = msg;
-            el.style.color = color;
+            if(color==='red') el.style.color = 'var(--danger)';
+            else if(color==='green') el.style.color = 'var(--success)';
+            else el.style.color = 'var(--text-sub)';
         }
 
         function toggleDebug() {
-            const panel = document.getElementById('debugPanel');
-            panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+            const p = document.getElementById('debugPanel');
+            p.classList.toggle('hidden');
         }
     </script>
 </body>
