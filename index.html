@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>Robot Studio BLE 9.6 (Realtime Trace)</title>
+    <title>Robot Studio BLE 10.7 (Logic Closed Loop)</title>
     <style>
         /* --- 样式部分保持不变 --- */
         :root { --primary: #007AFF; --primary-dark: #0056b3; --success: #34C759; --success-dark: #248a3d; --danger: #FF3B30; --danger-dark: #cc2f26; --bg-color: #F2F2F7; --card-bg: #FFFFFF; --text-main: #1C1C1E; --text-sub: #8E8E93; --border-radius: 16px; }
@@ -32,7 +32,7 @@
 
     <div class="navbar px-4 py-3 mb-4">
         <div class="max-w-md flex justify-between items-center mb-2">
-            <h1 class="text-lg text-main flex items-center gap-2">🤖 Robot Studio 9.6</h1>
+            <h1 class="text-lg text-main flex items-center gap-2">🤖 Robot Studio 10.7</h1>
             <button id="connectBtn" onclick="toggleConnection()" class="btn-outline" style="width: auto; border-radius: 18px;">
                 <span id="btIcon">📡</span> <span id="btText">未连接</span>
             </button>
@@ -73,8 +73,8 @@
                         <input type="range" id="smoothing" min="0" max="10" step="0.5" value="2.0">
                     </div>
                     <div>
-                        <div class="flex justify-between text-xs mb-1"><span>最小路径过滤 (mm)</span><span id="minLengthVal">2.0</span></div>
-                        <input type="range" id="minLength" min="0" max="5" step="0.1" value="2.0">
+                        <div class="flex justify-between text-xs mb-1"><span>最小路径过滤 (mm)</span><span id="minLengthVal">2.5</span></div>
+                        <input type="range" id="minLength" min="0" max="5" step="0.1" value="2.5">
                     </div>
                 </div>
             </details>
@@ -163,7 +163,7 @@
             </div>
         </div>
 
-        <div class="text-center text-xs text-sub pb-2">Robot Studio BLE 9.6 (Realtime Trace)</div>
+        <div class="text-center text-xs text-sub pb-2">Robot Studio BLE 10.7 (Logic Closed Loop)</div>
     </div>
 
     <div id="fullscreenModal" class="fullscreen-modal hidden" onclick="toggleFullscreen(false)">
@@ -271,7 +271,8 @@
                     if(!btn.innerText.includes("继续")) { btn.innerText = "▶ 继续"; btn.className = "btn btn-success col-span-2"; setBreathing(false); }
                 } else if(d.s === 3) { 
                     updateStatus("完成! 🎉", "green"); btn.innerText = "▶ 再次绘画"; btn.className = "btn btn-success col-span-2"; setBreathing(false);
-                    if (lastDrawnIndex > 0) drawSegment(0, lastDrawnIndex, true); 
+                    targetIndex = Math.max(0, allParsedLines.length - 1);
+                    document.getElementById('progressFill').style.width = "100%";
                 }
             } catch(err){}
         }
@@ -289,7 +290,7 @@
             reader.onload = function(evt) {
                 const img = new Image();
                 img.onload = function() {
-                    resetUIForNewImage();
+                    resetUIForNewImage(); 
                     const maxSize = 800; let w = img.width, h = img.height;
                     if (w > maxSize || h > maxSize) { const ratio = Math.min(maxSize / w, maxSize / h); w = Math.round(w * ratio); h = Math.round(h * ratio); }
                     imgWidth = w; imgHeight = h;
@@ -301,8 +302,7 @@
                     const pBtn = document.getElementById('processBtn'); pBtn.disabled = false; pBtn.classList.remove('btn-success'); pBtn.classList.add('btn-primary');
                     document.getElementById('processBtnText').innerText = "✨ 转换图片为路径";
                     document.getElementById('pathStats').innerText = `图片: ${w}x${h}px`;
-                    generatedGcode = ""; rawPaths = [];
-                    document.getElementById('uploadBtn').disabled = true; document.getElementById('downloadBtn').disabled = true;
+                    
                     updateBinaryPreview(); setTimeout(resizeTwinCanvas, 100);
                 }; img.src = evt.target.result;
             }; reader.readAsDataURL(file);
@@ -317,13 +317,42 @@
             setBreathing(false); 
             updateStatus("图片已加载", "black"); 
             document.getElementById('downloadBtn').disabled = true;
+            generatedGcode = ""; 
+            rawPaths = []; 
+            optimizedPaths = [];
+            allParsedLines = [];
             displayIndex = 0; targetIndex = 0; 
             twinCtx.clearRect(0,0,twinCanvas.width,twinCanvas.height);
         }
         
-        document.getElementById('threshold').addEventListener('input', (e) => { document.getElementById('thresholdVal').innerText = e.target.value; if(originalImage) updateBinaryPreview(); });
-        document.getElementById('smoothing').addEventListener('input', (e) => { document.getElementById('smoothingVal').innerText = e.target.value; if(rawPaths && rawPaths.length > 0) updatePathsAndGcode(); });
-        document.getElementById('minLength').addEventListener('input', (e) => { document.getElementById('minLengthVal').innerText = e.target.value; if(rawPaths && rawPaths.length > 0) updatePathsAndGcode(); });
+        // [辅助] 状态回退
+        function invalidateProcess() {
+            document.getElementById('processBtn').classList.remove('btn-success');
+            document.getElementById('processBtn').classList.add('btn-primary');
+            document.getElementById('processBtn').disabled = false;
+            document.getElementById('processBtnText').innerText = "✨ 转换图片为路径";
+            document.getElementById('uploadBtn').disabled = true;
+            document.getElementById('controlBtn').classList.add('hidden');
+            document.getElementById('uploadBtn').classList.add('hidden'); // 隐藏
+        }
+
+        // 所有参数变更，统一回退状态
+        document.getElementById('threshold').addEventListener('input', (e) => { 
+            document.getElementById('thresholdVal').innerText = e.target.value; 
+            if(originalImage) updateBinaryPreview(); 
+            invalidateProcess();
+        });
+        document.getElementById('hollowSolids').addEventListener('change', () => {
+            invalidateProcess();
+        });
+        document.getElementById('smoothing').addEventListener('input', (e) => { 
+            document.getElementById('smoothingVal').innerText = e.target.value; 
+            invalidateProcess();
+        });
+        document.getElementById('minLength').addEventListener('input', (e) => { 
+            document.getElementById('minLengthVal').innerText = e.target.value; 
+            invalidateProcess();
+        });
 
         function updateBinaryPreview() {
             if(!originalImage) return; const th = parseInt(document.getElementById('threshold').value);
@@ -345,6 +374,13 @@
                     updatePathsAndGcode();
                     btn.classList.remove('btn-primary'); btn.classList.add('btn-success');
                     updateStatus("转换成功，准备发送", "green"); document.getElementById('downloadBtn').disabled = false;
+                    
+                    // [核心修复] 转换成功后，必须把发送按钮显示出来
+                    const upBtn = document.getElementById('uploadBtn');
+                    upBtn.classList.remove('hidden'); 
+                    upBtn.innerText = "📡 发送任务";
+                    if(isConnected) upBtn.disabled = false; // 如果已连接，直接启用
+                    
                 } catch(e) { console.error(e); updateStatus("算法错误", "red"); } finally { btn.disabled = false; loader.classList.add('hidden'); txt.innerText = "✨ 转换完成"; }
             }, 50);
         }
@@ -367,7 +403,10 @@
             generateGcodeInternal();
             const pts = optimizedPaths.reduce((a,p)=>a+p.length,0);
             document.getElementById('pathStats').innerText = `路径: ${optimizedPaths.length} (原${tempPaths.length}) | 节点: ${pts}`;
-            resizeTwinCanvas(); if(isConnected) document.getElementById('uploadBtn').disabled = false; if(generatedGcode) document.getElementById('downloadBtn').disabled = false;
+            resizeTwinCanvas(); 
+            // 注意：这里不需要再处理 uploadBtn 的 hidden 状态，统一在 processImage 里处理
+            if(isConnected) document.getElementById('uploadBtn').disabled = false; 
+            if(generatedGcode) document.getElementById('downloadBtn').disabled = false;
         }
 
         function prepareBinaryData(th) { binaryData = new Int8Array(imgWidth*imgHeight); const d = originalImage.data; for(let i=0; i<imgWidth*imgHeight; i++) { const val = (0.34*d[i*4]+0.5*d[i*4+1]+0.16*d[i*4+2]); binaryData[i] = val < th ? 1 : 0; } }
@@ -488,6 +527,7 @@
             g+="G0 X0 Y0\n"; generatedGcode = g; parseAllLines(g); drawTwinPreview(g, '#e0e0e0');
         }
 
+        // [补回的控制函数]
         async function startUploadAndPrint() {
             if(!generatedGcode || !charCmd) return;
             const btn = document.getElementById('uploadBtn');
@@ -550,12 +590,9 @@
             });
         }
 
-        // [修改] 预览函数：恢复纯净的背景底图，不画红色标记
         function drawTwinPreview(txt, col) {
             twinCtx.clearRect(0,0,twinCanvas.width,twinCanvas.height);
             twinCtx.lineCap='round'; twinCtx.lineJoin='round';
-            
-            // 绘制灰色底图（所有有效路径）
             twinCtx.beginPath(); twinCtx.strokeStyle=col; twinCtx.lineWidth=1;
             if(allParsedLines.length===0) return;
             twinCtx.moveTo(allParsedLines[0].x, allParsedLines[0].y);
@@ -564,7 +601,6 @@
                 if(p.valid) { if(p.down) twinCtx.lineTo(p.x, p.y); else twinCtx.moveTo(p.x, p.y); }
             }
             twinCtx.stroke();
-            // [删除] 此处原先绘制红色 G0 预览的代码已移除，移至动态绘制
         }
 
         function drawArrow(ctx, x1, y1, x2, y2) {
@@ -582,7 +618,6 @@
             ctx.stroke();
         }
 
-        // [修改] 动态绘制函数：集成 G0 红线、箭头和端点圆圈的绘制逻辑
         function drawSegment(start, end, forceRed = false) {
             if (allParsedLines.length < 2) return;
 
@@ -605,7 +640,6 @@
                 let xEnd   = p1.x + (p2.x - p1.x) * rEnd;
                 let yEnd   = p1.y + (p2.y - p1.y) * rEnd;
 
-                // 绘制当前线段（蓝线或红线）
                 twinCtx.beginPath();
                 twinCtx.moveTo(xStart, yStart);
                 twinCtx.lineTo(xEnd, yEnd);
@@ -615,13 +649,11 @@
                     twinCtx.lineWidth = 2;
                     twinCtx.stroke();
                 } else {
-                    // 如果是 G0 抬笔移动
                     if (Math.abs(xEnd - xStart) > 0.1 || Math.abs(yEnd - yStart) > 0.1) {
                         twinCtx.strokeStyle = 'rgba(255, 59, 48, 0.6)';
                         twinCtx.lineWidth = 1;
                         twinCtx.stroke();
 
-                        // [新增] 如果是该段空移的起点 (rStart=0)，画抬笔红圈
                         if (rStart === 0) {
                              twinCtx.beginPath();
                              twinCtx.strokeStyle = '#FF3B30';
@@ -630,7 +662,6 @@
                              twinCtx.stroke();
                         }
 
-                        // [新增] 如果该段空移已走完 (rEnd=1)，画落笔红圈 + 箭头
                         if (rEnd === 1) {
                              drawArrow(twinCtx, xStart, yStart, xEnd, yEnd);
                              
