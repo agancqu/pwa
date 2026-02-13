@@ -385,32 +385,32 @@
             }, 50);
         }
 
-        // [修复版] 鬼影粉碎机：扩大连接豁免半径，挽救延长线
+        // [修复版] 鬼影粉碎机：增加"贴身检测"，精准剔除耳朵分叉
         function removeGhosts(paths, scale) {
-            // === 核心阈值调优 ===
-            const GHOST_MAX_LEN = 6.0;  // < 6mm 的线才会被审查
-            const ISOLATION_DIST = 1.5; // > 1.5mm 视为独立细节 (鼻子)
+            // === 核心阈值 ===
+            const GHOST_MAX_LEN = 6.0;    // < 6mm 的线才会被审查
+            const ISOLATION_DIST = 1.5;   // > 1.5mm 视为独立细节(鼻子)
+            const TIP_CONNECT_DIST = 3.0; // 端点连接判定半径
             
-            // [关键修改] 将连接阈值从 1.2mm 提升到 3.0mm
-            // 理由：头部延长线的断缝可能在 1.5~2mm，必须被覆盖
-            // 风险控制：尾巴鬼影在尾巴中段，离端点很远，不会受此影响
-            const CONNECT_DIST = 3.0;   
+            // 角度阈值
+            const STRUCTURAL_DOT = 0.5;   // < 0.5 (夹角>60度) 视为强结构(T型)，严格保留
+            const EXTENSION_DOT = 0.8;    // > 0.8 (夹角<36度) 视为平行/顺延趋势
             
-            const PARALLEL_LIMIT = 0.9; // 平行度 > 0.9 (夹角<25度) 视为平行
+            // [关键新增] 贴身阈值
+            // 头部延长线是为了补缝，离主线主体通常 > 1.0mm
+            // 耳朵鬼影是贴身毛刺，离主线主体通常 < 0.5mm
+            const HUGGING_DIST = 0.6;     
 
-            // 辅助：计算两点距离
+            // 辅助函数
             const d = (p1, p2) => Math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2) * scale;
             
-            // 辅助：获取所有长线的端点 (用于连接检查)
-            const hostTips = [];
-            
-            // 1. 筛选宿主并收集端点
+            // 1. 建立宿主索引
             const hosts = [];
+            const hostTips = [];
             const pathInfos = paths.map((p, idx) => {
                 let len = 0; for(let i=1;i<p.length;i++) len+=d(p[i],p[i-1]);
                 const info = { p, len, idx, start:p[0], end:p[p.length-1] };
-                
-                if(len > 8.0) { // >8mm 视为宿主
+                if(len > 8.0) {
                     hosts.push(info);
                     hostTips.push(info.start);
                     hostTips.push(info.end);
@@ -418,7 +418,7 @@
                 return info;
             });
 
-            // 辅助：计算点到线段的最短距离 & 方向向量
+            // 辅助：计算投影距离和方向
             const getProj = (pt, poly) => {
                 let minD = Infinity, vec = {x:0, y:0};
                 for(let i=0; i<poly.length-1; i++){
@@ -433,12 +433,10 @@
                 return {d:minD, v:vec};
             };
 
-            // 2. 审查每一条路径
+            // 2. 审查
             return paths.filter((_, idx) => {
                 const curr = pathInfos[idx];
-                
-                // 长线免检
-                if(curr.len > GHOST_MAX_LEN) return true;
+                if(curr.len > GHOST_MAX_LEN) return true; // 长线免检
 
                 // 计算自身向量
                 const dx = curr.end.x - curr.start.x;
@@ -447,7 +445,7 @@
                 const myVec = myLen>0 ? {x:dx/myLen, y:dy/myLen} : {x:0,y:0};
                 const midPt = curr.p[Math.floor(curr.p.length/2)];
 
-                // 步骤 A: 寻找最近的宿主
+                // 寻找最近宿主
                 let minDist = Infinity;
                 let projVec = {x:0,y:0};
 
@@ -460,30 +458,49 @@
                     }
                 }
 
-                // 定律 1: 独立定律 (保护鼻子)
-                // 离所有长线都很远 -> 保留
+                // 规则 1: 独立定律 (保留鼻子)
                 if(minDist > ISOLATION_DIST) return true;
 
-                // 定律 2: 连接定律 (保护屁股连接线 & 头部延长线)
-                // 只要挨着大哥的头或尾，就是自己人 (扩大的 3.0mm 半径)
-                for(const tip of hostTips) {
-                    const dStart = d(curr.start, tip);
-                    const dEnd = d(curr.end, tip);
-                    if(dStart < CONNECT_DIST || dEnd < CONNECT_DIST) {
-                        return true; // 连上了，保留！
+                // 计算平行度
+                const dot = Math.abs(myVec.x*projVec.x + myVec.y*projVec.y);
+
+                // 规则 2: 结构定律 (保留T型连接)
+                // 夹角很大 (>60度)，说明是垂直结构
+                if(dot < STRUCTURAL_DOT) return true;
+
+                // 规则 3: 顺延定律 (区分 延长线 vs 鬼影)
+                // 如果比较平行 (夹角<36度)
+                if(dot > EXTENSION_DOT) {
+                    // 检查是否连接端点
+                    let isConnected = false;
+                    for(const tip of hostTips) {
+                        if(d(curr.start, tip) < TIP_CONNECT_DIST || d(curr.end, tip) < TIP_CONNECT_DIST) {
+                            isConnected = true; 
+                            break;
+                        }
+                    }
+
+                    if(isConnected) {
+                        // [核心判据] 即使连上了，还要看是否"贴身"
+                        // 头部延长线：为了补缝，通常有一定的横向偏移或纵向距离 (minDist >= 0.6)
+                        // 耳朵鬼影：紧贴主线及其延长线 (minDist < 0.6)
+                        if(minDist < HUGGING_DIST) {
+                            return false; // 贴太近了，这是双轨鬼影 -> 删除
+                        } else {
+                            return true;  // 有一定间隙，这是补缝延长线 -> 保留
+                        }
                     }
                 }
 
-                // 定律 3: 角度定律 (保护耳朵根部/T型分叉)
-                // 虽然离得近，也没连上端点，但不平行 -> 保留
-                const dot = Math.abs(myVec.x*projVec.x + myVec.y*projVec.y);
-                if(dot < PARALLEL_LIMIT) return true;
-
-                // 审判终结：
-                // 离得近 + 平行 + 没连端点 = 悬空中段鬼影 -> 删除
+                // 其他情况：
+                // - 不平行 (Y型分叉 36-60度)
+                // - 平行但不连接
+                // - 连接但贴身
+                // 统统视为噪点 -> 删除
                 return false; 
             });
         }
+        
 
         function updatePathsAndGcode() {
             const sm = parseFloat(document.getElementById('smoothing').value);
