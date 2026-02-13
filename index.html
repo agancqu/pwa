@@ -385,170 +385,111 @@
             }, 50);
         }
 
-        // [V18.1 语法修复版] 精细鬼影清除：拓扑聚合 + 投影重叠判决
-        function removeGhostsFine(paths, scale) {
-            // === 核心参数 ===
-            const GHOST_MAX_LEN = 5.0;    // < 5mm 的线才会被列为嫌疑对象
-            const HOST_MIN_LEN = 10.0;    // > 10mm 的聚合体才有资格充当宿主
+        function updatePathsAndGcode() {
+            const sm = parseFloat(document.getElementById('smoothing').value);
+            const minLen = parseFloat(document.getElementById('minLength').value); 
+            const scale = 100.0 / Math.max(imgWidth, 1);
             
-            const HUGGING_DIST = 0.8;     // 侧向距离 < 0.8mm (贴身)
-            const PARALLEL_DOT = 0.9;     // 平行度 > 0.9 (夹角 < 25度)
-            
-            // 辅助函数
-            const d = (p1, p2) => Math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2) * scale;
-            const getLen = (p) => { let l=0; for(let i=1;i<p.length;i++) l+=d(p[i],p[i-1]); return l; };
+            const sorted = sortAndMergePaths(rawPaths);
+            let tempPaths = sorted.map(p => simplifyPathRDP(p, sm));
+        
+            let filteredPaths = tempPaths.filter(path => {
+                let lenPx = 0;
+                for(let i = 1; i < path.length; i++) lenPx += Math.sqrt((path[i].x-path[i-1].x)**2 + (path[i].y-path[i-1].y)**2);
+                const lenMm = lenPx * scale;
+                const start = path[0], end = path[path.length-1];
+                const gapMm = Math.sqrt((start.x - end.x)**2 + (start.y - end.y)**2) * scale;
+                
+                // 【特赦 1】：闭合细节（眼珠、鼻孔）绝对保留
+                if (gapMm < 2.0) return true; 
+                return lenMm > 0.4; 
+            });
+        
+            if (typeof removeGhostsFine === 'function') filteredPaths = removeGhostsFine(filteredPaths, scale);
+            optimizedPaths = filteredPaths; 
+            generateGcodeInternal();
+            resizeTwinCanvas(); 
+            if (isConnected) document.getElementById('uploadBtn').disabled = false; 
+            if (generatedGcode) document.getElementById('downloadBtn').disabled = false;
+        }
 
-            // 1. 预计算元数据
+        // [V39.0 高阈值精准打击版] 彻底分离结构与鬼影
+        function removeGhostsFine(paths, scale) {
+            const GHOST_MAX_LEN = 12.0;   
+            const DEAD_ZONE = 0.6;        // 【关键收窄】只有 < 0.6mm 的极近重影才杀
+            const SAFE_ZONE = 3.8;        // 鼻子保护区
+            const PARALLEL_DOT = 0.975;   // 【关键提升】只有 > 0.975 的绝对平行才杀
+            const JOIN_TOL = 5.0;         // 适度聚合
+
             const n = paths.length;
+            const d = (p1, p2) => Math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2) * scale;
+            const getLen = (p) => { let l = 0; for (let i = 1; i < p.length; i++) l += d(p[i], p[i - 1]); return l; };
+
             const metas = paths.map((p, i) => {
                 const len = getLen(p);
-                const dx = p[p.length-1].x - p[0].x; 
-                const dy = p[p.length-1].y - p[0].y;
-                const h = Math.sqrt(dx*dx+dy*dy);
-                const vec = h>0 ? {x:dx/h, y:dy/h} : {x:0,y:0};
-                return { id: i, p, len, start: p[0], end: p[p.length-1], vec };
+                const dx = p[p.length - 1].x - p[0].x, dy = p[p.length - 1].y - p[0].y, h = Math.sqrt(dx * dx + dy * dy);
+                return { id: i, p, len, start: p[0], end: p[p.length - 1], vec: h > 0 ? {x: dx / h, y: dy / h} : {x: 0, y: 0} };
             });
 
-            // 2. 拓扑聚合 (Union-Find) - 解决“宿主判断只看一段”的问题
+            // 1. 并查集聚合
             const parent = new Int32Array(n).map((_, i) => i);
-            const clusterLen = new Float32Array(n); // 存储每个聚合体的总长度
-
+            const clusterLen = new Float32Array(n);
             function find(i) { while(i !== parent[i]) i = parent[i]; return i; }
-            function union(i, j) {
-                const rootI = find(i); const rootJ = find(j);
-                if (rootI !== rootJ) parent[rootI] = rootJ;
-            }
-
-            // 简单的首尾连接聚合
-            const JOIN_TOL = 1.5; // 连接容差
-            for (let i = 0; i < n; i++) {
-                for (let j = i + 1; j < n; j++) {
-                    const A = metas[i], B = metas[j];
-                    // 检查四种连接情况
-                    if (d(A.end, B.start) < JOIN_TOL || d(A.start, B.end) < JOIN_TOL || 
-                        d(A.end, B.end) < JOIN_TOL || d(A.start, B.start) < JOIN_TOL) {
-                        union(i, j);
-                    }
+            for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+                if (d(metas[i].end, metas[j].start) < JOIN_TOL || d(metas[i].start, metas[j].end) < JOIN_TOL || 
+                    d(metas[i].end, metas[j].end) < JOIN_TOL || d(metas[i].start, metas[j].start) < JOIN_TOL) {
+                    const rI = find(i), rJ = find(j); if (rI !== rJ) parent[rI] = rJ;
                 }
             }
-
-            // 计算每个 Cluster 的总长度
             for (let i = 0; i < n; i++) clusterLen[find(i)] += metas[i].len;
 
-            // 3. 核心审判
             const toRemove = new Set();
-
-            // [关键修改] 使用 Label 标记外层循环
             outerLoop: for (let i = 0; i < n; i++) {
-                const curr = metas[i];
-                
-                // [条件1] 只处理短线
-                if (curr.len > GHOST_MAX_LEN) continue;
-
-                const midIdx = Math.floor(curr.p.length / 2);
-                const midPt = curr.p[midIdx];
-                const rootI = find(i);
+                const curr = metas[i]; if (curr.len > GHOST_MAX_LEN) continue; 
+                const midPt = curr.p[Math.floor(curr.p.length / 2)];
+                let nearestHostDist = Infinity, bestDot = 0, bestHostIdx = -1;
 
                 for (let j = 0; j < n; j++) {
                     if (i === j) continue;
-                    
-                    // 不要和自己属于同一个聚合体的线比较
-                    const rootJ = find(j);
-                    if (rootI === rootJ) continue;
-
                     const host = metas[j];
-                    
-                    // [条件2] 宿主必须足够强壮 (看聚合后的总长)
-                    if (clusterLen[rootJ] < HOST_MIN_LEN) continue;
-                    
-                    // [条件3] 宿主必须比当前线长很多
-                    if (host.len < curr.len * 2) continue;
-
-                    // --- 几何投影检测 ---
                     for (let k = 0; k < host.p.length - 1; k++) {
-                        const p1 = host.p[k], p2 = host.p[k+1];
-                        const hdx = p2.x - p1.x, hdy = p2.y - p1.y;
-                        const l2 = hdx*hdx + hdy*hdy; 
+                        const p1 = host.p[k], p2 = host.p[k + 1], hdx = p2.x-p1.x, hdy = p2.y-p1.y, l2 = hdx*hdx+hdy*hdy;
                         if (l2 === 0) continue;
-
-                        // 计算投影系数 t
                         const t = ((midPt.x - p1.x) * hdx + (midPt.y - p1.y) * hdy) / l2;
+                        const tC = Math.max(0, Math.min(1, t));
+                        const dist = Math.sqrt((midPt.x - (p1.x + tC * hdx))**2 + (midPt.y - (p1.y + tC * hdy))**2) * scale;
                         
-                        // 计算"侧向距离"
-                        const tClamped = Math.max(0, Math.min(1, t));
-                        const projX = p1.x + tClamped * hdx;
-                        const projY = p1.y + tClamped * hdy;
-                        const dist = Math.sqrt((midPt.x - projX)**2 + (midPt.y - projY)**2) * scale;
+                        if (dist < nearestHostDist) { 
+                            nearestHostDist = dist; bestHostIdx = j;
+                            const hLen = Math.sqrt(l2);
+                            bestDot = Math.abs(curr.vec.x * (hdx / hLen) + curr.vec.y * (hdy / hLen));
+                        }
+                    }
+                }
 
-                        // [判决时刻]
-                        if (dist < HUGGING_DIST) { // 距离极近 (贴身)
-                            
-                            // 检查平行度
-                            const hostSegLen = Math.sqrt(l2);
-                            const hostVec = {x: hdx/hostSegLen, y: hdy/hostSegLen};
-                            const dot = Math.abs(curr.vec.x * hostVec.x + curr.vec.y * hostVec.y);
+                if (nearestHostDist > SAFE_ZONE) continue; // 保护鼻子孤岛
 
-                            if (dot > PARALLEL_DOT) { // 高度平行
-                                
-                                // [核心判据]
-                                // 投影落在内部 -> 鬼影
-                                if (t > 0.05 && t < 0.95) {
-                                    toRemove.add(i);
-                                    // [关键修改] 使用 continue label 跳出多层循环并继续下一次 outerLoop
-                                    continue outerLoop; 
-                                }
-                            }
+                if (nearestHostDist < DEAD_ZONE && bestHostIdx !== -1) {
+                    const hostMeta = metas[bestHostIdx];
+                    // 【特赦 A】绝对锚定：如果端点极其接近 (<0.8mm) 主线端点，判定为连接结构
+                    const dMin = Math.min(d(curr.start, hostMeta.start), d(curr.start, hostMeta.end), d(curr.end, hostMeta.start), d(curr.end, hostMeta.end));
+                    if (dMin < 0.8) continue;
+
+                    const hostRoot = find(bestHostIdx);
+                    // 【终极判据】：Ratio > 12.0
+                    // 机器人补笔 (Ratio ~5) -> 保留
+                    // 猴子鬼影 (Ratio ~30) -> 删除
+                    if (clusterLen[hostRoot] > curr.len * 12.0) {
+                        if (bestDot > PARALLEL_DOT) {
+                            toRemove.add(i); 
+                            continue outerLoop;
                         }
                     }
                 }
             }
-
             return paths.filter((_, i) => !toRemove.has(i));
         }
 
-        function updatePathsAndGcode() {
-            const sm = parseFloat(document.getElementById('smoothing').value);
-            const minLen = parseFloat(document.getElementById('minLength').value); 
-            
-            const WORK_WIDTH = 100.0; 
-            const scale = WORK_WIDTH / Math.max(imgWidth, 1);
-            
-            // --- 第一步：初步路径生成与排序 ---
-            // 此时 rawPaths 包含了所有提取出的原始像素路径
-            const sorted = sortAndMergePaths(rawPaths);
-            let tempPaths = sorted.map(p => simplifyPathRDP(p, sm));
-        
-            // --- 第二步：基础过滤（minLength） ---
-            // 先根据用户设定的最小长度过滤掉真正的细碎垃圾
-            let filteredPaths = tempPaths.filter(path => {
-                let lenPx = 0;
-                for(let i=1; i<path.length; i++) {
-                    lenPx += Math.sqrt((path[i].x-path[i-1].x)**2 + (path[i].y-path[i-1].y)**2);
-                }
-                return (lenPx * scale) >= minLen;
-            });
-        
-            // --- 第三步：【关键：全局清理】 ---
-            // 在这里一次性调用清理函数。此时 filteredPaths 已经包含了整张图的所有有效线条。
-            // 清理算法可以运行并查集（Union-Find）来识别哪些线条属于同一个“聚合体”。
-            // 这个函数会利用全局拓扑聚合，判断哪些是“寄生”在长线上的毛刺
-            if (typeof removeGhostsFine === 'function') {
-                filteredPaths = removeGhostsFine(filteredPaths, scale);
-            }
-        
-            // --- 第四步：最终赋值并生成 G-Code ---
-            optimizedPaths = filteredPaths; 
-        
-            generateGcodeInternal();
-            
-            // 更新统计信息
-            const pts = optimizedPaths.reduce((a,p)=>a+p.length,0);
-            document.getElementById('pathStats').innerText = `路径: ${optimizedPaths.length} | 节点: ${pts}`;
-            resizeTwinCanvas(); 
-            
-            if(isConnected) document.getElementById('uploadBtn').disabled = false; 
-            if(generatedGcode) document.getElementById('downloadBtn').disabled = false;
-        }
         function prepareBinaryData(th) { binaryData = new Int8Array(imgWidth*imgHeight); const d = originalImage.data; for(let i=0; i<imgWidth*imgHeight; i++) { const val = (0.34*d[i*4]+0.5*d[i*4+1]+0.16*d[i*4+2]); binaryData[i] = val < th ? 1 : 0; } }
         function getPixel(x,y){ if(x<0||x>=imgWidth||y<0||y>=imgHeight)return 0; return binaryData[y*imgWidth+x]; }
         function hollowSolids() { const t = new Int8Array(binaryData); for(let y=1; y<imgHeight-1; y++) { for(let x=1; x<imgWidth-1; x++) { const idx = y*imgWidth+x; if(t[idx] && t[idx-1] && t[idx+1] && t[idx-imgWidth] && t[idx+imgWidth]) binaryData[idx]=0; } } }
