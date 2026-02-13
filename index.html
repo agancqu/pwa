@@ -385,26 +385,274 @@
             }, 50);
         }
 
+        // [修复版] 鬼影粉碎机：扩大连接豁免半径，挽救延长线
+        function removeGhosts(paths, scale) {
+            // === 核心阈值调优 ===
+            const GHOST_MAX_LEN = 6.0;  // < 6mm 的线才会被审查
+            const ISOLATION_DIST = 1.5; // > 1.5mm 视为独立细节 (鼻子)
+            
+            // [关键修改] 将连接阈值从 1.2mm 提升到 3.0mm
+            // 理由：头部延长线的断缝可能在 1.5~2mm，必须被覆盖
+            // 风险控制：尾巴鬼影在尾巴中段，离端点很远，不会受此影响
+            const CONNECT_DIST = 3.0;   
+            
+            const PARALLEL_LIMIT = 0.9; // 平行度 > 0.9 (夹角<25度) 视为平行
+
+            // 辅助：计算两点距离
+            const d = (p1, p2) => Math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2) * scale;
+            
+            // 辅助：获取所有长线的端点 (用于连接检查)
+            const hostTips = [];
+            
+            // 1. 筛选宿主并收集端点
+            const hosts = [];
+            const pathInfos = paths.map((p, idx) => {
+                let len = 0; for(let i=1;i<p.length;i++) len+=d(p[i],p[i-1]);
+                const info = { p, len, idx, start:p[0], end:p[p.length-1] };
+                
+                if(len > 8.0) { // >8mm 视为宿主
+                    hosts.push(info);
+                    hostTips.push(info.start);
+                    hostTips.push(info.end);
+                }
+                return info;
+            });
+
+            // 辅助：计算点到线段的最短距离 & 方向向量
+            const getProj = (pt, poly) => {
+                let minD = Infinity, vec = {x:0, y:0};
+                for(let i=0; i<poly.length-1; i++){
+                    const p1=poly[i], p2=poly[i+1];
+                    const dx=p2.x-p1.x, dy=p2.y-p1.y;
+                    const l2=dx*dx+dy*dy; if(l2===0) continue;
+                    let t=((pt.x-p1.x)*dx+(pt.y-p1.y)*dy)/l2;
+                    t=Math.max(0,Math.min(1,t)); 
+                    const dist=Math.sqrt((pt.x-(p1.x+t*dx))**2 + (pt.y-(p1.y+t*dy))**2)*scale;
+                    if(dist<minD){ minD=dist; vec={x:dx/Math.sqrt(l2), y:dy/Math.sqrt(l2)}; }
+                }
+                return {d:minD, v:vec};
+            };
+
+            // 2. 审查每一条路径
+            return paths.filter((_, idx) => {
+                const curr = pathInfos[idx];
+                
+                // 长线免检
+                if(curr.len > GHOST_MAX_LEN) return true;
+
+                // 计算自身向量
+                const dx = curr.end.x - curr.start.x;
+                const dy = curr.end.y - curr.start.y;
+                const myLen = Math.sqrt(dx*dx+dy*dy);
+                const myVec = myLen>0 ? {x:dx/myLen, y:dy/myLen} : {x:0,y:0};
+                const midPt = curr.p[Math.floor(curr.p.length/2)];
+
+                // 步骤 A: 寻找最近的宿主
+                let minDist = Infinity;
+                let projVec = {x:0,y:0};
+
+                for(const host of hosts) {
+                    if(host.idx === idx) continue;
+                    const proj = getProj(midPt, host.p);
+                    if(proj.d < minDist) {
+                        minDist = proj.d;
+                        projVec = proj.v;
+                    }
+                }
+
+                // 定律 1: 独立定律 (保护鼻子)
+                // 离所有长线都很远 -> 保留
+                if(minDist > ISOLATION_DIST) return true;
+
+                // 定律 2: 连接定律 (保护屁股连接线 & 头部延长线)
+                // 只要挨着大哥的头或尾，就是自己人 (扩大的 3.0mm 半径)
+                for(const tip of hostTips) {
+                    const dStart = d(curr.start, tip);
+                    const dEnd = d(curr.end, tip);
+                    if(dStart < CONNECT_DIST || dEnd < CONNECT_DIST) {
+                        return true; // 连上了，保留！
+                    }
+                }
+
+                // 定律 3: 角度定律 (保护耳朵根部/T型分叉)
+                // 虽然离得近，也没连上端点，但不平行 -> 保留
+                const dot = Math.abs(myVec.x*projVec.x + myVec.y*projVec.y);
+                if(dot < PARALLEL_LIMIT) return true;
+
+                // 审判终结：
+                // 离得近 + 平行 + 没连端点 = 悬空中段鬼影 -> 删除
+                return false; 
+            });
+        }
+
         function updatePathsAndGcode() {
             const sm = parseFloat(document.getElementById('smoothing').value);
-            const minLen = parseFloat(document.getElementById('minLength').value);
-            const WORK_WIDTH = 100.0; const scale = WORK_WIDTH / Math.max(imgWidth, 1);
+            // minLength 设为极小，仅用于过滤几乎不可见的底噪
+            const WORK_WIDTH = 100.0; 
+            const scale = WORK_WIDTH / Math.max(imgWidth, 1);
+            
             const sorted = sortAndMergePaths(rawPaths);
             let tempPaths = sorted.map(p => simplifyPathRDP(p, sm));
-            optimizedPaths = tempPaths.filter(path => {
-                if(path.length < 2) return false;
-                let lenPx = 0;
-                for(let i=1; i<path.length; i++) {
-                    const dx = path[i].x - path[i-1].x; const dy = path[i].y - path[i-1].y;
-                    lenPx += Math.sqrt(dx*dx + dy*dy);
+
+            // --- 几何工具 ---
+            function distSq(p1, p2) { return (p1.x-p2.x)**2 + (p1.y-p2.y)**2; }
+            function dist(p1, p2) { return Math.sqrt(distSq(p1, p2)); }
+            
+            // 计算点到折线的最短距离，同时返回最近线段的方向向量
+            function getClosestInfo(pt, polyline) {
+                let minD = Infinity;
+                let bestVec = {x:0, y:0}; 
+
+                for (let i = 0; i < polyline.length - 1; i++) {
+                    const p1 = polyline[i];
+                    const p2 = polyline[i+1];
+                    const dx = p2.x - p1.x;
+                    const dy = p2.y - p1.y;
+                    const l2 = dx*dx + dy*dy;
+                    if (l2 === 0) continue;
+
+                    let t = ((pt.x - p1.x) * dx + (pt.y - p1.y) * dy) / l2;
+                    t = Math.max(0, Math.min(1, t));
+                    
+                    const projX = p1.x + t * dx;
+                    const projY = p1.y + t * dy;
+                    const d = Math.sqrt((pt.x - projX)**2 + (pt.y - projY)**2);
+                    
+                    if (d < minD) {
+                        minDist = d;
+                        const len = Math.sqrt(l2);
+                        bestVec = { x: dx/len, y: dy/len };
+                    }
                 }
-                return (lenPx * scale) >= minLen;
+                return { dist: minD * scale, vec: bestVec }; 
+            }
+
+            // [第一步] 构建元数据
+            let pathMeta = tempPaths.map(path => {
+                if (path.length < 2) return { path, lenMm: 0, isClosed: false };
+                
+                let lenPx = 0;
+                for(let i=1; i<path.length; i++) lenPx += dist(path[i], path[i-1]);
+                const lenMm = lenPx * scale;
+                
+                const start = path[0];
+                const end = path[path.length-1];
+                const isClosed = (dist(start, end) * scale) < 1.0; 
+
+                // 计算自身的主方向向量
+                let dx = end.x - start.x;
+                let dy = end.y - start.y;
+                let dLen = Math.sqrt(dx*dx + dy*dy);
+                let vec = (dLen > 0) ? { x: dx/dLen, y: dy/dLen } : {x:0,y:0};
+
+                return { path, lenMm, isClosed, start, end, vec };
             });
+
+            // [第二步] 智能过滤器：宿主审判 + 盟友救援
+            optimizedPaths = [];
+            
+            // === 阈值调优 ===
+            const NOISE_FLOOR = 0.5;    // < 0.5mm: 底噪删除
+            const HOST_LEN = 10.0;      // > 10mm: 宿主长线 (有权审判)
+            
+            const ISOLATION_GAP = 2.0;  // > 2.0mm: 视为独立细节(鼻子)
+            const PARALLEL_LIMIT = 0.9; // 平行度 > 0.9: 视为平行鬼影
+            
+            const HOST_CONNECT_RADIUS = 3.0; // 宿主端点豁免 (针对长线断笔)
+            const ALLY_CONNECT_RADIUS = 1.2; // 盟友救援半径 (针对T型连接/短线拼接)
+            // ================
+
+            for (let i = 0; i < pathMeta.length; i++) {
+                const curr = pathMeta[i];
+                
+                // 1. 保护长线和闭合圆
+                if (curr.lenMm > HOST_LEN || curr.isClosed) {
+                    optimizedPaths.push(curr.path);
+                    continue;
+                }
+
+                // 2. 删除底噪
+                if (curr.lenMm < NOISE_FLOOR) continue;
+
+                // 3. 智能审判 (0.5mm ~ 10mm)
+                let isGhost = false; // 默认清白
+                const midPt = curr.path[Math.floor(curr.path.length/2)];
+
+                // --- 阶段 A: 宿主审判 (检查是否是鬼影) ---
+                for (let j = 0; j < pathMeta.length; j++) {
+                    const host = pathMeta[j];
+                    if (host.lenMm < HOST_LEN) continue; // 只怕长线
+
+                    const info = getClosestInfo(midPt, host.path);
+                    
+                    // 如果贴得很近 (< 2.0mm)
+                    if (info.dist < ISOLATION_GAP) {
+                        
+                        // 检查是否连接宿主端点 (延长线豁免)
+                        const d1 = dist(curr.start, host.start) * scale;
+                        const d2 = dist(curr.start, host.end) * scale;
+                        const d3 = dist(curr.end, host.start) * scale;
+                        const d4 = dist(curr.end, host.end) * scale;
+                        
+                        if (Math.min(d1, d2, d3, d4) < HOST_CONNECT_RADIUS) {
+                            isGhost = false; 
+                            break; // 连着大哥的头尾，是自己人，无需再查
+                        }
+
+                        // 检查角度
+                        const dot = Math.abs(curr.vec.x * info.vec.x + curr.vec.y * info.vec.y);
+                        
+                        if (dot > PARALLEL_LIMIT) {
+                            // 既贴身，又平行，还悬空 -> 判定为鬼影
+                            isGhost = true; 
+                            // 注意：这里不 break，因为可能还有其他线能救它
+                        } else {
+                            // 有角度 (T型)，说明是结构 -> 安全
+                            isGhost = false; 
+                            break; 
+                        }
+                    }
+                }
+
+                // --- 阶段 B: 盟友救援 (如果被判死刑，再查一遍有没有朋友) ---
+                if (isGhost) {
+                    let hasAlly = false;
+                    for (let k = 0; k < pathMeta.length; k++) {
+                        if (i === k) continue; // 不连自己
+                        const ally = pathMeta[k];
+                        
+                        // 检查是否连接到 *任何* 其他线的端点 (哪怕是短线)
+                        const d1 = dist(curr.start, ally.start) * scale;
+                        const d2 = dist(curr.start, ally.end) * scale;
+                        const d3 = dist(curr.end, ally.start) * scale;
+                        const d4 = dist(curr.end, ally.end) * scale;
+
+                        if (Math.min(d1, d2, d3, d4) < ALLY_CONNECT_RADIUS) {
+                            hasAlly = true;
+                            break; // 找到朋友了！
+                        }
+                    }
+                    
+                    if (hasAlly) {
+                        isGhost = false; // 救援成功！
+                    }
+                }
+
+                if (!isGhost) {
+                    optimizedPaths.push(curr.path);
+                }
+            }
+
+            // [最后一道防线] 运行外挂鬼影粉碎机 (保持原样，无需修改)
+            if (typeof removeGhosts === 'function') {
+                optimizedPaths = removeGhosts(optimizedPaths, scale);
+            }
+
             generateGcodeInternal();
             const pts = optimizedPaths.reduce((a,p)=>a+p.length,0);
             document.getElementById('pathStats').innerText = `路径: ${optimizedPaths.length} (原${tempPaths.length}) | 节点: ${pts}`;
             resizeTwinCanvas(); 
-            // 注意：这里不需要再处理 uploadBtn 的 hidden 状态，统一在 processImage 里处理
+            
             if(isConnected) document.getElementById('uploadBtn').disabled = false; 
             if(generatedGcode) document.getElementById('downloadBtn').disabled = false;
         }
