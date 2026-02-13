@@ -397,15 +397,21 @@
                 let lenPx = 0;
                 for(let i = 1; i < path.length; i++) lenPx += Math.sqrt((path[i].x-path[i-1].x)**2 + (path[i].y-path[i-1].y)**2);
                 const lenMm = lenPx * scale;
-                const start = path[0], end = path[path.length-1];
-                const gapMm = Math.sqrt((start.x - end.x)**2 + (start.y - end.y)**2) * scale;
                 
-                // 【特赦 1】：闭合细节（眼珠、鼻孔）绝对保留
-                if (gapMm < 2.0) return true; 
-                return lenMm > 0.4; 
+                // 基础长度过滤
+                return lenMm > 0.2; 
             });
         
-            if (typeof removeGhostsFine === 'function') filteredPaths = removeGhostsFine(filteredPaths, scale);
+            // 第一步：身份认定与标记（发放免死金牌）
+            if (typeof removeGhostsFine === 'function') {
+                filteredPaths = removeGhostsFine(filteredPaths, scale);
+            }
+
+            // 第二步：无条件大清洗（处决未被豁免的违规线）
+            if (typeof clearGhostLinesFinal === 'function') {
+                filteredPaths = clearGhostLinesFinal(filteredPaths, scale);
+            }
+
             optimizedPaths = filteredPaths; 
             generateGcodeInternal();
             resizeTwinCanvas(); 
@@ -413,80 +419,190 @@
             if (generatedGcode) document.getElementById('downloadBtn').disabled = false;
         }
 
-        // [V39.0 高阈值精准打击版] 彻底分离结构与鬼影
+        // [V51.0 法官函数]
+        // 职责：识别所有“结构性线条”，给它们打上 .isSafe = true 的标签。
+        // 不再负责删除，只负责保护。
         function removeGhostsFine(paths, scale) {
-            const GHOST_MAX_LEN = 12.0;   
-            const DEAD_ZONE = 0.6;        // 【关键收窄】只有 < 0.6mm 的极近重影才杀
-            const SAFE_ZONE = 3.8;        // 鼻子保护区
-            const PARALLEL_DOT = 0.975;   // 【关键提升】只有 > 0.975 的绝对平行才杀
-            const JOIN_TOL = 5.0;         // 适度聚合
+            const CONNECT_TOL = 2.5;      // 连接容差
+            const STRUCTURAL_DOT = 0.7;   // 结构角度阈值 (约45度)，小于此值视为硬连接
+            const MIN_ANCHOR_LEN = 3.0;   // 只有连到大线上才算数
 
             const n = paths.length;
             const d = (p1, p2) => Math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2) * scale;
             const getLen = (p) => { let l = 0; for (let i = 1; i < p.length; i++) l += d(p[i], p[i - 1]); return l; };
+            const abs = Math.abs;
 
+            // 1. 初始化元数据与标记
             const metas = paths.map((p, i) => {
                 const len = getLen(p);
                 const dx = p[p.length - 1].x - p[0].x, dy = p[p.length - 1].y - p[0].y, h = Math.sqrt(dx * dx + dy * dy);
+                // 默认都不安全
+                p.isSafe = false; 
                 return { id: i, p, len, start: p[0], end: p[p.length - 1], vec: h > 0 ? {x: dx / h, y: dy / h} : {x: 0, y: 0} };
             });
 
-            // 1. 并查集聚合
-            const parent = new Int32Array(n).map((_, i) => i);
-            const clusterLen = new Float32Array(n);
-            function find(i) { while(i !== parent[i]) i = parent[i]; return i; }
-            for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
-                if (d(metas[i].end, metas[j].start) < JOIN_TOL || d(metas[i].start, metas[j].end) < JOIN_TOL || 
-                    d(metas[i].end, metas[j].end) < JOIN_TOL || d(metas[i].start, metas[j].start) < JOIN_TOL) {
-                    const rI = find(i), rJ = find(j); if (rI !== rJ) parent[rI] = rJ;
+            // 2. 发放免死金牌
+            for (let i = 0; i < n; i++) {
+                const curr = metas[i]; 
+                
+                // [金牌 A] 闭合回路免死 (眼睛)
+                if (d(curr.start, curr.end) < 2.0) {
+                    paths[i].isSafe = true;
+                    continue;
                 }
-            }
-            for (let i = 0; i < n; i++) clusterLen[find(i)] += metas[i].len;
 
-            const toRemove = new Set();
-            outerLoop: for (let i = 0; i < n; i++) {
-                const curr = metas[i]; if (curr.len > GHOST_MAX_LEN) continue; 
-                const midPt = curr.p[Math.floor(curr.p.length / 2)];
-                let nearestHostDist = Infinity, bestDot = 0, bestHostIdx = -1;
+                // [金牌 B] 拓扑结构免死
+                let startConnected = false;
+                let endConnected = false;
+                let hasHardConnection = false; // 是否有垂直/大角度连接
 
                 for (let j = 0; j < n; j++) {
                     if (i === j) continue;
-                    const host = metas[j];
-                    for (let k = 0; k < host.p.length - 1; k++) {
-                        const p1 = host.p[k], p2 = host.p[k + 1], hdx = p2.x-p1.x, hdy = p2.y-p1.y, l2 = hdx*hdx+hdy*hdy;
-                        if (l2 === 0) continue;
-                        const t = ((midPt.x - p1.x) * hdx + (midPt.y - p1.y) * hdy) / l2;
-                        const tC = Math.max(0, Math.min(1, t));
-                        const dist = Math.sqrt((midPt.x - (p1.x + tC * hdx))**2 + (midPt.y - (p1.y + tC * hdy))**2) * scale;
-                        
-                        if (dist < nearestHostDist) { 
-                            nearestHostDist = dist; bestHostIdx = j;
-                            const hLen = Math.sqrt(l2);
-                            bestDot = Math.abs(curr.vec.x * (hdx / hLen) + curr.vec.y * (hdy / hLen));
+                    const other = metas[j];
+                    if (other.len < MIN_ANCHOR_LEN) continue; // 忽略噪点
+
+                    // 检查起点连接
+                    if (!startConnected || !hasHardConnection) {
+                        for (let k = 0; k < other.p.length - 1; k++) {
+                            const p1 = other.p[k], p2 = other.p[k + 1];
+                            const hdx = p2.x - p1.x, hdy = p2.y - p1.y, l2 = hdx * hdx + hdy * hdy;
+                            if (l2 === 0) continue;
+                            let t = ((curr.start.x - p1.x) * hdx + (curr.start.y - p1.y) * hdy) / l2; t = Math.max(0, Math.min(1, t));
+                            if (Math.sqrt((curr.start.x - (p1.x + t * hdx))**2 + (curr.start.y - (p1.y + t * hdy))**2) * scale < CONNECT_TOL) {
+                                startConnected = true;
+                                const hLen = Math.sqrt(l2);
+                                const dot = abs(curr.vec.x * (hdx / hLen) + curr.vec.y * (hdy / hLen));
+                                if (dot < STRUCTURAL_DOT) hasHardConnection = true; // 发现硬连接
+                            }
+                        }
+                    }
+                    
+                    // 检查终点连接
+                    if (!endConnected || !hasHardConnection) {
+                        for (let k = 0; k < other.p.length - 1; k++) {
+                            const p1 = other.p[k], p2 = other.p[k + 1];
+                            const hdx = p2.x - p1.x, hdy = p2.y - p1.y, l2 = hdx * hdx + hdy * hdy;
+                            if (l2 === 0) continue;
+                            let t = ((curr.end.x - p1.x) * hdx + (curr.end.y - p1.y) * hdy) / l2; t = Math.max(0, Math.min(1, t));
+                            if (Math.sqrt((curr.end.x - (p1.x + t * hdx))**2 + (curr.end.y - (p1.y + t * hdy))**2) * scale < CONNECT_TOL) {
+                                endConnected = true;
+                                const hLen = Math.sqrt(l2);
+                                const dot = abs(curr.vec.x * (hdx / hLen) + curr.vec.y * (hdy / hLen));
+                                if (dot < STRUCTURAL_DOT) hasHardConnection = true; // 发现硬连接
+                            }
                         }
                     }
                 }
 
-                if (nearestHostDist > SAFE_ZONE) continue; // 保护鼻子孤岛
+                // 规则：只要有硬连接（机器人腿部），或者两头都连（桥梁），就是安全的
+                if (hasHardConnection || (startConnected && endConnected)) {
+                    paths[i].isSafe = true;
+                }
+            }
+            
+            // 法官不杀人，原样返回（带着标记）
+            return paths;
+        }
 
-                if (nearestHostDist < DEAD_ZONE && bestHostIdx !== -1) {
-                    const hostMeta = metas[bestHostIdx];
-                    // 【特赦 A】绝对锚定：如果端点极其接近 (<0.8mm) 主线端点，判定为连接结构
-                    const dMin = Math.min(d(curr.start, hostMeta.start), d(curr.start, hostMeta.end), d(curr.end, hostMeta.start), d(curr.end, hostMeta.end));
-                    if (dMin < 0.8) continue;
+        // [V52.0 集群感知终极清理版]
+        // 修复：宿主线被切碎导致鬼影线找不到“大腿”而逃脱的问题。
+        // 逻辑：引入并查集，只要依附的“线团”总长超过阈值，且符合短/近/平，一律删除。
+        function clearGhostLinesFinal(paths, scale) {
+            // --- 无条件删除阈值 ---
+            const KILL_LEN = 5.0;         // 鬼影长度上限 (5mm)
+            const KILL_DIST = 1.0;        // 贴身距离 (1mm)
+            const KILL_DOT = 0.8;         // 平行度 (夹角 < 37度)
+            const MIN_CLUSTER_LEN = 10.0; // 【核心修改】只看集群总长，不看单体长度
+            
+            // 聚合参数
+            const JOIN_TOL = 2.0;         // 连通判定距离
 
-                    const hostRoot = find(bestHostIdx);
-                    // 【终极判据】：Ratio > 12.0
-                    // 机器人补笔 (Ratio ~5) -> 保留
-                    // 猴子鬼影 (Ratio ~30) -> 删除
-                    if (clusterLen[hostRoot] > curr.len * 12.0) {
-                        if (bestDot > PARALLEL_DOT) {
-                            toRemove.add(i); 
-                            continue outerLoop;
-                        }
+            const n = paths.length;
+            const d = (p1, p2) => Math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2) * scale;
+            const abs = Math.abs;
+
+            // 1. 计算元数据
+            const metas = paths.map((p, i) => {
+                let l = 0; for(let j=1; j<p.length; j++) l += d(p[j], p[j-1]);
+                const dx = p[p.length - 1].x - p[0].x, dy = p[p.length - 1].y - p[0].y, h = Math.sqrt(dx * dx + dy * dy);
+                return { id: i, p, len: l, start: p[0], end: p[p.length - 1], vec: h > 0 ? {x: dx / h, y: dy / h} : {x: 0, y: 0} };
+            });
+
+            // 2. 构建并查集 (将碎线粘合成整体)
+            const parent = new Int32Array(n).map((_, i) => i);
+            const clusterLen = new Float32Array(n);
+            function find(i) { while(i !== parent[i]) i = parent[i]; return i; }
+            function union(i, j) {
+                const rootI = find(i);
+                const rootJ = find(j);
+                if (rootI !== rootJ) parent[rootI] = rootJ;
+            }
+
+            // O(N^2) 聚合：只要端点靠得近，就算一家人
+            for (let i = 0; i < n; i++) {
+                for (let j = i + 1; j < n; j++) {
+                    if (d(metas[i].end, metas[j].start) < JOIN_TOL || 
+                        d(metas[i].start, metas[j].end) < JOIN_TOL ||
+                        d(metas[i].end, metas[j].end) < JOIN_TOL || 
+                        d(metas[i].start, metas[j].start) < JOIN_TOL) {
+                        union(i, j);
                     }
                 }
             }
+
+            // 累加集群总长度
+            for (let i = 0; i < n; i++) {
+                clusterLen[find(i)] += metas[i].len;
+            }
+
+            const toRemove = new Set();
+
+            for (let i = 0; i < n; i++) {
+                // [前置检查]
+                //if (paths[i].isSafe) continue; // 有免死金牌的（如眼睛、机器人腿）跳过
+                const curr = metas[i];
+                if (curr.len >= KILL_LEN) continue; // 长线跳过
+
+                let nearestDist = Infinity;
+                let bestDot = 0;
+                
+                // 采样中点
+                const midPx = curr.p[Math.floor(curr.p.length/2)];
+
+                // [核心修复] 遍历寻找宿主
+                for (let j = 0; j < n; j++) {
+                    if (i === j) continue;
+                    
+                    // 关键判断：不看单条线长，看家族总长
+                    const hostRoot = find(j);
+                    if (clusterLen[hostRoot] < MIN_CLUSTER_LEN) continue; // 家族太小，忽略
+
+                    const host = metas[j];
+                    
+                    // 几何计算：点到线段距离
+                    for (let k = 0; k < host.p.length - 1; k+=2) { // 步进优化
+                        const p1 = host.p[k], p2 = host.p[k + 1];
+                        const hdx = p2.x - p1.x, hdy = p2.y - p1.y, l2 = hdx * hdx + hdy * hdy;
+                        if (l2 === 0) continue;
+                        let t = ((midPx.x - p1.x) * hdx + (midPx.y - p1.y) * hdy) / l2;
+                        t = Math.max(0, Math.min(1, t));
+                        const dist = Math.sqrt((midPx.x - (p1.x + t * hdx))**2 + (midPx.y - (p1.y + t * hdy))**2) * scale;
+                        
+                        if (dist < nearestDist) {
+                            nearestDist = dist;
+                            const hLen = Math.sqrt(l2);
+                            bestDot = abs(curr.vec.x * (hdx / hLen) + curr.vec.y * (hdy / hLen));
+                        }
+                    }
+                }
+
+                // 3. 最终裁决：短 + 近 + 平行 = 死
+                // 这一次，因为我们识别出了破碎的尾巴是“大家族”，nearestDist 会被正确计算出来
+                if (nearestDist < KILL_DIST && bestDot > KILL_DOT) {
+                    toRemove.add(i);
+                }
+            }
+
             return paths.filter((_, i) => !toRemove.has(i));
         }
 
