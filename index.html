@@ -118,6 +118,25 @@
             </div>
         </div>
 
+        <div class="card">
+            <h2 class="text-sm font-bold text-sub uppercase mb-3">STEP 3. 图库文件上传 (G-Code + MP3)</h2>
+            <div class="relative upload-area mb-4">
+                <input type="file" id="pairInput" accept=".gcode,.mp3" multiple class="absolute inset-0 w-full h-full z-10 opacity-0">
+                <span class="upload-icon">📂</span>
+                <span class="upload-text">点击选择文件对</span>
+                <span class="upload-sub">(同时选中2个文件)</span>
+            </div>
+            <div id="pairFileNames" class="text-xs text-center mb-2 text-sub font-bold"></div>
+            
+            <div class="progress-track hidden" id="pairProgressTrack">
+                <div id="pairProgressFill" class="progress-fill"></div>
+            </div>
+
+            <button id="uploadPairBtn" onclick="startPairUpload()" class="btn btn-primary" disabled>
+                🚀 上传到设备预设图库
+            </button>
+        </div>
+
         <div class="flex justify-center mb-12">
             <button onclick="toggleDebug()" class="text-xs text-sub underline opacity-50 hover:opacity-100 bg-transparent border-none cursor-pointer">
                 🛠 打开调试面板
@@ -201,6 +220,9 @@
         let syncGcodeBuffer = "";
         let hasRequestedSync = false;
         
+        // --- 本地图库上传专用变量 ---
+        let pairFilesToUpload = [];
+
         const imgCanvas = document.getElementById('imgCanvas');
         const imgCtx = imgCanvas.getContext('2d');
         const twinCanvas = document.getElementById('twinCanvas');
@@ -239,8 +261,12 @@
         function onConnected() { 
             isConnected = true; hasRequestedSync = false; isSyncingGcode = false;
             document.getElementById('btText').innerText = "已连接"; document.getElementById('btIcon').innerText = "✅"; const btn = document.getElementById('connectBtn'); btn.style.borderColor = "var(--success)"; btn.style.color = "var(--success)"; updateStatus("设备已就绪", "green"); toggleTurbo(); if (generatedGcode) document.getElementById('uploadBtn').disabled = false; 
+            if(pairFilesToUpload.length === 2 && document.getElementById('pairFileNames').innerText.includes('✅')) document.getElementById('uploadPairBtn').disabled = false;
         }
-        function onDisconnected() { isConnected = false; document.getElementById('btText').innerText = "连接设备"; document.getElementById('btIcon').innerText = "📡"; const btn = document.getElementById('connectBtn'); btn.style.borderColor = "#E5E5EA"; btn.style.color = "var(--primary)"; setBreathing(false); document.getElementById('uploadBtn').disabled = true; document.getElementById('controlBtn').classList.add('hidden'); document.getElementById('uploadBtn').classList.remove('hidden'); updateStatus("设备已断开", "red"); }
+        function onDisconnected() { 
+            isConnected = false; document.getElementById('btText').innerText = "连接设备"; document.getElementById('btIcon').innerText = "📡"; const btn = document.getElementById('connectBtn'); btn.style.borderColor = "#E5E5EA"; btn.style.color = "var(--primary)"; setBreathing(false); document.getElementById('uploadBtn').disabled = true; document.getElementById('controlBtn').classList.add('hidden'); document.getElementById('uploadBtn').classList.remove('hidden'); updateStatus("设备已断开", "red"); 
+            document.getElementById('uploadPairBtn').disabled = true;
+        }
 
         // --- 动画循环渲染引擎 ---
         function startRenderLoop() {
@@ -299,18 +325,16 @@
                 const btn = document.getElementById('controlBtn');
                 
                 // 【修复 Bug 2】：精准检测这是不是一次由“硬件物理按键”发起的全新绘画！
-                // 标志 hw===1 且进度行数极小(i<=2)，并且这轮还没请求过同步 -> 强制清除旧画作，发起新同步
                 if (d.hw === 1 && d.i <= 2 && !isSyncingGcode && !hasRequestedSync) {
-                    allParsedLines = [];      // 强制清空上一张图残留的数据
-                    displayIndex = 0;         // 动画重置
+                    allParsedLines = [];      
+                    displayIndex = 0;         
                     targetIndex = 0;
                     twinCtx.clearRect(0,0,twinCanvas.width,twinCanvas.height);
-                    
                     hasRequestedSync = true;
                     sendCommand("CMD:SYNC_GCODE");
                 }
                 
-                // 兜底智能按需请求：如果设备在画，但我本地什么也没有，同样请求同步
+                // 兜底智能按需请求
                 if ((d.s === 1 || d.s === 2) && allParsedLines.length === 0 && !isSyncingGcode && !hasRequestedSync) {
                     hasRequestedSync = true;
                     sendCommand("CMD:SYNC_GCODE");
@@ -325,13 +349,10 @@
                         document.getElementById('uploadBtn').classList.add('hidden'); 
                         setBreathing(true); 
                     }
-                    
                     const total = (d.t && d.t > 0) ? d.t : (allParsedLines.length > 0 ? allParsedLines.length : 1);
                     const pct = Math.round((d.i / total) * 100);
                     document.getElementById('progressFill').style.width = Math.min(100, Math.max(0, pct)) + "%"; 
-                    
                     if(!isSyncingGcode) updateStatus(`绘画中: ${pct}%`, "green");
-                    
                     if (allParsedLines.length > 0 && !isSyncingGcode) {
                         targetIndex = Math.min(d.i, allParsedLines.length - 1); 
                         if (targetIndex < 0) targetIndex = 0;
@@ -350,7 +371,7 @@
                     setBreathing(false);
                     if (allParsedLines.length > 0 && !isSyncingGcode) targetIndex = Math.max(0, allParsedLines.length - 1);
                     document.getElementById('progressFill').style.width = "100%";
-                    hasRequestedSync = false; // 任务彻底结束，允许下一次全新的同步
+                    hasRequestedSync = false; 
                 } else if (d.s === 0) { // IDLE
                     if (btn.innerText.includes("暂停") || btn.innerText.includes("继续") || btn.innerText.includes("再次")) {
                         btn.innerText = "▶ 开始绘画"; 
@@ -359,7 +380,7 @@
                         if(!isSyncingGcode) updateStatus("设备已就绪", "green");
                         document.getElementById('progressFill').style.width = "0%";
                     }
-                    hasRequestedSync = false; // 任务已中断/归位，允许下一次全新的同步
+                    hasRequestedSync = false; 
                 }
             } catch(err){ console.error("BLE Parse error: ", err); }
         }
@@ -371,6 +392,126 @@
         function setBreathing(enable) { const st = document.getElementById('status'); if(enable) st.classList.add('status-breathing'); else st.classList.remove('status-breathing'); }
         function toggleDebug() { const p = document.getElementById('debugPanel'); p.classList.toggle('hidden'); }
         function downloadGcode() { if (!generatedGcode) return alert("请先转换图片生成 G-Code"); const blob = new Blob([generatedGcode], { type: 'text/plain' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'robot_drawing.gcode'; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); }
+
+        // --- 图库文件对强校验逻辑 ---
+        document.getElementById('pairInput').addEventListener('change', function(e) {
+            pairFilesToUpload = Array.from(e.target.files);
+            const infoDiv = document.getElementById('pairFileNames');
+            const btn = document.getElementById('uploadPairBtn');
+
+            if (pairFilesToUpload.length !== 2) {
+                infoDiv.innerText = "❌ 请必须同时选择2个文件 (1个.gcode, 1个.mp3)";
+                btn.disabled = true; return;
+            }
+
+            const gcodeFile = pairFilesToUpload.find(f => f.name.toLowerCase().endsWith('.gcode'));
+            const mp3File = pairFilesToUpload.find(f => f.name.toLowerCase().endsWith('.mp3'));
+
+            if (!gcodeFile || !mp3File) {
+                infoDiv.innerText = "❌ 必须包含一个 .gcode 和一个 .mp3 文件";
+                btn.disabled = true; return;
+            }
+
+            if (gcodeFile.size === 0 || gcodeFile.size > 200 * 1024 || mp3File.size === 0 || mp3File.size > 200 * 1024) {
+                infoDiv.innerText = "❌ 文件不能是空文件且大小必须在 200KB 以内";
+                btn.disabled = true; return;
+            }
+
+            const baseGcode = gcodeFile.name.substring(0, gcodeFile.name.lastIndexOf('.'));
+            const baseMp3 = mp3File.name.substring(0, mp3File.name.lastIndexOf('.'));
+
+            if (baseGcode !== baseMp3) {
+                infoDiv.innerText = `❌ 文件基名不匹配: ${baseGcode} vs ${baseMp3}`;
+                btn.disabled = true; return;
+            }
+
+            const match = baseGcode.match(/^(\d{1,2})_([a-zA-Z0-9_]+)$/);
+            if (!match) {
+                infoDiv.innerText = "❌ 命名不符合规范 (必须为 编号_名称格式, 例: 12_dog)";
+                btn.disabled = true; return;
+            }
+
+            const num = parseInt(match[1]);
+            if (num > 30) {
+                infoDiv.innerText = "❌ 编号不能大于 30";
+                btn.disabled = true; return;
+            }
+
+            infoDiv.innerText = `✅ 已校验就绪: ${baseGcode} (.gcode & .mp3)`;
+            btn.disabled = !isConnected;
+        });
+
+        // --- 图库文件原子性上传逻辑 ---
+        async function startPairUpload() {
+            if (pairFilesToUpload.length !== 2 || !charCmd) return;
+            const gcodeFile = pairFilesToUpload.find(f => f.name.toLowerCase().endsWith('.gcode'));
+            const mp3File = pairFilesToUpload.find(f => f.name.toLowerCase().endsWith('.mp3'));
+            const basename = gcodeFile.name.substring(0, gcodeFile.name.lastIndexOf('.'));
+
+            const btn = document.getElementById('uploadPairBtn');
+            const track = document.getElementById('pairProgressTrack');
+            const fill = document.getElementById('pairProgressFill');
+
+            btn.disabled = true; track.classList.remove('hidden'); fill.style.width = '0%';
+            setBreathing(true);
+
+            try {
+                // 1. 发送清理命令，清除遗留的临时文件
+                updateStatus("开始清理设备临时空间...", "blue");
+                await sendCommand("CMD:F_CLEAN");
+                await new Promise(r => setTimeout(r, 300));
+
+                // 2. 上传 G-Code (0% -> 30%)
+                await uploadSingleBinaryFile(gcodeFile, "/spiffs/tmp.gcode", fill, 0, 30);
+
+                // 3. 上传 MP3 (30% -> 100%)
+                await uploadSingleBinaryFile(mp3File, "/spiffs/tmp.mp3", fill, 30, 70);
+
+                // 4. 发送落盘 Commit 指令
+                updateStatus("正在安全替换图库文件...", "blue");
+                await sendCommand(`CMD:F_COMMIT:${basename}`);
+                await new Promise(r => setTimeout(r, 600));
+
+                updateStatus("✅ 图库文件对上传并落盘成功", "green");
+                fill.style.width = '100%';
+            } catch(e) {
+                console.error(e);
+                updateStatus("❌ 上传失败，自动清理环境", "red");
+                await sendCommand("CMD:F_CLEAN");
+            } finally {
+                setBreathing(false);
+                btn.disabled = false;
+                setTimeout(() => track.classList.add('hidden'), 3000);
+            }
+        }
+
+        async function uploadSingleBinaryFile(file, targetPath, fillEl, startPct, weightPct) {
+            const buffer = await file.arrayBuffer();
+            const data = new Uint8Array(buffer);
+            const size = data.length;
+
+            updateStatus(`正在传输临时文件: ${file.name}...`, "blue");
+            
+            // 握手：告知 ESP32 进入纯二进制接收模式，并传递文件大小
+            await sendCommand(`CMD:F_OPEN:${targetPath}:${size}`);
+            await new Promise(r => setTimeout(r, 300));
+
+            // 将流按安全 MTU 进行切片（预留余量，防止阻塞）
+            const CHUNK = 150; 
+            for (let i = 0; i < size; i += CHUNK) {
+                const chunk = data.slice(i, i + CHUNK);
+                await charCmd.writeValue(chunk); // 纯二进制下发
+                
+                if(i % (CHUNK * 5) === 0) { // 减少 UI 更新频率
+                    const p = startPct + (i / size) * weightPct;
+                    fillEl.style.width = `${p}%`;
+                }
+                // 留出时间让底层的协议栈去消化
+                await new Promise(r => setTimeout(r, 15)); 
+            }
+            // 给 ESP32 关闭文件描述符的时间
+            await new Promise(r => setTimeout(r, 200));
+        }
 
         // --- 图像处理核心逻辑 ---
         document.getElementById('imageInput').addEventListener('change', function(e) {
