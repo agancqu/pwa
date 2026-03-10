@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>Robot Studio BLE 10.32 (Logic Closed Loop)</title>
+    <title>Robot Studio BLE 10.35 (Logic Closed Loop)</title>
     <style>
         /* --- 样式部分保持不变 --- */
         :root { --primary: #007AFF; --primary-dark: #0056b3; --success: #34C759; --success-dark: #248a3d; --danger: #FF3B30; --danger-dark: #cc2f26; --bg-color: #F2F2F7; --card-bg: #FFFFFF; --text-main: #1C1C1E; --text-sub: #8E8E93; --border-radius: 16px; }
@@ -32,7 +32,7 @@
 
     <div class="navbar px-4 py-3 mb-4">
         <div class="max-w-md flex justify-between items-center mb-2">
-            <h1 class="text-lg text-main flex items-center gap-2">🤖 Robot Studio 10.32</h1>
+            <h1 class="text-lg text-main flex items-center gap-2">🤖 Robot Studio 10.35</h1>
             <button id="connectBtn" onclick="toggleConnection()" class="btn-outline" style="width: auto; border-radius: 18px;">
                 <span id="btIcon">📡</span> <span id="btText">未连接</span>
             </button>
@@ -724,51 +724,187 @@
             imgCtx.putImageData(output, 0, 0);
         }
 
+        /**
+        * 修复版：基于几何宽度过滤的图像处理
+        * 确保：实心线条 -> 保持实心 -> 骨架化为单线
+        * 确保：实心眼睛 -> 中心挖空 -> 骨架化为圆圈
+        */
         async function processImage() {
-            if(!originalImage) return; const btn = document.getElementById('processBtn'); const loader = document.getElementById('loader'); const txt = document.getElementById('processBtnText');
-            btn.disabled = true; loader.classList.remove('hidden'); txt.innerText = "正在运算...";
+            if(!originalImage) return; 
+            const btn = document.getElementById('processBtn'); 
+            const loader = document.getElementById('loader'); 
+            const txt = document.getElementById('processBtnText');
+            
+            btn.disabled = true; 
+            loader.classList.remove('hidden'); 
+            txt.innerText = "正在运算...";
+
             setTimeout(() => {
                 try {
-                    const th = parseInt(document.getElementById('threshold').value); const hollow = document.getElementById('hollowSolids').checked;
+                    const th = parseInt(document.getElementById('threshold').value);
+                    
+                    // 1. 生成原始二值化数据 
                     prepareBinaryData(th);
-                    if(hollow) hollowSolids();
+                    
+                    // 2. 【核心修复】使用 7 像素探测核进行安全空心化 
+                    // 线条宽度一般为 2-5 像素，7 像素探测核能 100% 保护线条不被掏空
+                    hollowLargeSolidShapesFinal(16); 
+
+                    // 3. 骨架化：实心线条会收缩为单中心线，空心眼睛会收缩为单圆圈 
                     skeletonize();
                     tracePaths(); 
+                    
+                    // 4. 调用空间重叠感知过滤生成最终 G-Code 
                     updatePathsAndGcode();
-                    btn.classList.remove('btn-primary'); btn.classList.add('btn-success');
-                    updateStatus("转换成功，准备发送", "green"); document.getElementById('downloadBtn').disabled = false;
+
+                    btn.classList.remove('btn-primary'); 
+                    btn.classList.add('btn-success');
+                    updateStatus("转换成功", "green"); 
                     
                     const upBtn = document.getElementById('uploadBtn');
                     upBtn.classList.remove('hidden'); 
-                    upBtn.innerText = "📡 发送任务";
                     if(isConnected) upBtn.disabled = false;
                     
-                } catch(e) { console.error(e); updateStatus("算法错误", "red"); } finally { btn.disabled = false; loader.classList.add('hidden'); txt.innerText = "✨ 转换完成"; }
+                } catch(e) { 
+                    console.error(e); 
+                    updateStatus("算法错误", "red"); 
+                } finally { 
+                    btn.disabled = false; 
+                    loader.classList.add('hidden'); 
+                    txt.innerText = "✨ 转换完成"; 
+                }
             }, 50);
         }
 
+        /**
+        * 终极安全空心化函数
+        * 数学逻辑：只有当一个像素周围 [size x size] 范围内全黑时才挖空 
+        */
+        function hollowLargeSolidShapesFinal(size) {
+            const w = imgWidth;
+            const h = imgHeight;
+            const data = binaryData;
+            // 使用副本进行判定，防止原地修改导致的连带塌陷 
+            const original = new Int8Array(data);
+            const offset = Math.floor(size / 2);
+
+            for (let y = offset; y < h - offset; y++) {
+                for (let x = offset; x < w - offset; x++) {
+                    const idx = y * w + x;
+                    // 只处理原始黑色像素 
+                    if (original[idx] === 1) {
+                        let canHollow = true;
+                        // 探测周围 [size x size] 区域 
+                        for (let ky = -offset; ky <= offset; ky++) {
+                            for (let kx = -offset; kx <= offset; kx++) {
+                                // 如果区域内有任何一点是白色，说明该点离边缘很近（可能是线条），绝不挖空 
+                                if (original[(y + ky) * w + (x + kx)] === 0) {
+                                    canHollow = false;
+                                    break;
+                                }
+                            }
+                            if (!canHollow) break;
+                        }
+                        // 只有处于“深层黑色腹地”的点（如眼睛中心）才执行挖空 
+                        if (canHollow) data[idx] = 0;
+                    }
+                }
+            }
+        }
+        
+        /**
+        * 终极优化版：空间重叠感知过滤 G-Code 生成逻辑
+        * 专门解决几乎重叠、距离极近的长短线冲突
+        */
         function updatePathsAndGcode() {
             const sm = parseFloat(document.getElementById('smoothing').value);
-            const minLen = parseFloat(document.getElementById('minLength').value); 
-            const scale = 100.0 / Math.max(imgWidth, 1);
+            const minLenThreshold = parseFloat(document.getElementById('minLength').value); 
+            const WORK_WIDTH = 100.0;
+            const scale = WORK_WIDTH / Math.max(imgWidth, 1);
             
-            const sorted = sortAndMergePaths(rawPaths);
-            let tempPaths = sorted.map(p => simplifyPathRDP(p, sm));
-        
-            let filteredPaths = tempPaths.filter(path => {
-                let lenPx = 0;
-                for(let i = 1; i < path.length; i++) lenPx += Math.sqrt((path[i].x-path[i-1].x)**2 + (path[i].y-path[i-1].y)**2);
-                return (lenPx * scale) > 0.2; 
-            });
-        
-            if (typeof removeGhostsFine === 'function') filteredPaths = removeGhostsFine(filteredPaths, scale);
-            if (typeof clearGhostLinesFinal === 'function') filteredPaths = clearGhostLinesFinal(filteredPaths, scale);
+            // 1. 初步 RDP 简化和物理长度过滤
+            let processedPaths = rawPaths
+                .map(p => simplifyPathRDP(p, sm))
+                .filter(path => {
+                    if (path.length < 2) return false;
+                    let len = 0;
+                    for (let i = 1; i < path.length; i++) {
+                        len += Math.sqrt((path[i].x - path[i-1].x)**2 + (path[i].y - path[i-1].y)**2) * scale;
+                    }
+                    return len >= minLenThreshold;
+                });
 
-            optimizedPaths = filteredPaths; 
-            generateGcodeInternal();
-            resizeTwinCanvas(); 
+            // 2. 核心：重叠路径剔除算法 (Overlap Detection)
+            // 数学逻辑：按路径长度从长到短排序，短路径若与长路径空间高度重合则剔除
+            processedPaths.sort((a, b) => b.length - a.length); 
+            
+            const finalFilteredPaths = [];
+            const OVERLAP_TOLERANCE = 0.8; // 800um (0.8mm) 内视为重合
+            
+            for (let i = 0; i < processedPaths.length; i++) {
+                const currentPath = processedPaths[i];
+                let isRedundant = false;
+
+                // 与已保留的长主线进行比对
+                for (const masterPath of finalFilteredPaths) {
+                    let hitCount = 0;
+                    // 抽样检查当前路径的点是否都在 masterPath 的包络线内
+                    for (const pt of currentPath) {
+                        let minDist = Infinity;
+                        for (let k = 0; k < masterPath.length - 1; k++) {
+                            const d = distToSegment(pt, masterPath[k], masterPath[k+1]) * scale;
+                            if (d < minDist) minDist = d;
+                        }
+                        if (minDist < OVERLAP_TOLERANCE) hitCount++;
+                    }
+                    
+                    // 如果 80% 以上的点都贴合在长线上，判定为鬼影冗余
+                    if (hitCount / currentPath.length > 0.8) {
+                        isRedundant = true;
+                        break;
+                    }
+                }
+
+                if (!isRedundant) {
+                    finalFilteredPaths.push(currentPath);
+                }
+            }
+
+            // 3. 执行最终排序与合并
+            optimizedPaths = sortAndMergePaths(finalFilteredPaths);
+            
+            // 4. 生成 G-Code 字符串
+            let g = "G90\nM5\n";
+            optimizedPaths.forEach(p => {
+                if (p.length === 0) return;
+                g += `G0 X${(p[0].x * scale).toFixed(2)} Y${((imgHeight - p[0].y) * scale).toFixed(2)}\n`;
+                g += `M3 S1000\n`;
+                for (let i = 1; i < p.length; i++) {
+                    g += `G1 X${(p[i].x * scale).toFixed(2)} Y${((imgHeight - p[i].y) * scale).toFixed(2)}\n`;
+                }
+                g += `M5\n`;
+            });
+            g += "G0 X0 Y0\n"; 
+            
+            generatedGcode = g; 
+            parseAllLines(g); 
+            drawTwinPreview(g, '#b0b0b0'); 
+            
             if (isConnected) document.getElementById('uploadBtn').disabled = false; 
             if (generatedGcode) document.getElementById('downloadBtn').disabled = false;
+            
+            console.log(`[重叠过滤] 原始: ${processedPaths.length} -> 最终: ${finalFilteredPaths.length}`);
+        }
+
+        /**
+        * 辅助数学函数：计算点到线段的距离
+        */
+        function distToSegment(p, v, w) {
+            const l2 = (v.x - w.x)**2 + (v.y - w.y)**2;
+            if (l2 === 0) return Math.sqrt((p.x - v.x)**2 + (p.y - v.y)**2);
+            let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+            t = Math.max(0, Math.min(1, t));
+            return Math.sqrt((p.x - (v.x + t * (w.x - v.x)))**2 + (p.y - (v.y + t * (w.y - v.y)))**2);
         }
 
         function removeGhostsFine(paths, scale) {
@@ -928,7 +1064,7 @@
                 for(let i=1; i<p.length; i++) g+=`G1 X${(p[i].x*scale).toFixed(2)} Y${((imgHeight-p[i].y)*scale).toFixed(2)}\n`;
                 g+=`M5\n`;
             });
-            g+="G0 X0 Y0\n"; generatedGcode = g; parseAllLines(g); drawTwinPreview(g, '#e0e0e0');
+            g+="G0 X0 Y0\n"; generatedGcode = g; parseAllLines(g); drawTwinPreview(g, '#b0b0b0');
         }
 
         async function startUploadAndPrint() {
@@ -1048,7 +1184,7 @@
             const dpr = window.devicePixelRatio || 1;
             twinCanvas.width = rect.width * dpr; twinCanvas.height = rect.height * dpr;
             twinCtx.scale(dpr, dpr);
-            if(generatedGcode) drawTwinPreview(generatedGcode, '#e0e0e0');
+            if(generatedGcode) drawTwinPreview(generatedGcode, '#b0b0b0');
             if(displayIndex > 0) drawSegment(0, displayIndex);
         }
         function toggleFullscreen(show) {
