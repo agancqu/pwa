@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>Robot Studio BLE 10.30 (Logic Closed Loop)</title>
+    <title>Robot Studio BLE 10.32 (Logic Closed Loop)</title>
     <style>
         /* --- 样式部分保持不变 --- */
         :root { --primary: #007AFF; --primary-dark: #0056b3; --success: #34C759; --success-dark: #248a3d; --danger: #FF3B30; --danger-dark: #cc2f26; --bg-color: #F2F2F7; --card-bg: #FFFFFF; --text-main: #1C1C1E; --text-sub: #8E8E93; --border-radius: 16px; }
@@ -32,7 +32,7 @@
 
     <div class="navbar px-4 py-3 mb-4">
         <div class="max-w-md flex justify-between items-center mb-2">
-            <h1 class="text-lg text-main flex items-center gap-2">🤖 Robot Studio 10.30</h1>
+            <h1 class="text-lg text-main flex items-center gap-2">🤖 Robot Studio 10.32</h1>
             <button id="connectBtn" onclick="toggleConnection()" class="btn-outline" style="width: auto; border-radius: 18px;">
                 <span id="btIcon">📡</span> <span id="btText">未连接</span>
             </button>
@@ -172,12 +172,18 @@
                     <button class="btn-outline" style="flex: 1;" onclick="sendTestAudio()">🔊 测试</button>
                 </div>
             </div>
+            <br/>
 
             <button id="playRecBtn" onclick="playLastRecording()" class="btn btn-primary mt-3" disabled>
                 ▶️ 播放最近录音
             </button>
+            <br/>
 
-            <div class="mt-2 text-xs text-gray-400 text-center break-all">
+            <button id="downloadWavBtn" onclick="downloadLastRecording()" class="btn btn-success mt-3" disabled>
+                💾 下载 WAV 文件
+            </button>
+
+            <div id="uuidDisplay" class="mt-2 text-xs text-gray-400 text-center break-all">
                 UUID: ...ee...34fb
             </div>
         </div>
@@ -262,10 +268,21 @@
             isConnected = true; hasRequestedSync = false; isSyncingGcode = false;
             document.getElementById('btText').innerText = "已连接"; document.getElementById('btIcon').innerText = "✅"; const btn = document.getElementById('connectBtn'); btn.style.borderColor = "var(--success)"; btn.style.color = "var(--success)"; updateStatus("设备已就绪", "green"); toggleTurbo(); if (generatedGcode) document.getElementById('uploadBtn').disabled = false; 
             if(pairFilesToUpload.length === 2 && document.getElementById('pairFileNames').innerText.includes('✅')) document.getElementById('uploadPairBtn').disabled = false;
+            
+            // --- 新增：连接成功后，在调试面板打印完整 UUID 供原生 App 联调参考 ---
+            document.getElementById('uuidDisplay').innerHTML = `
+                Srv: ${SERVICE_UUID}<br>
+                Cmd: ${CHAR_CMD_UUID}<br>
+                Stat: ${CHAR_STAT_UUID}<br>
+                Aud: ${CHAR_AUDIO_UUID}
+            `;
         }
         function onDisconnected() { 
             isConnected = false; document.getElementById('btText').innerText = "连接设备"; document.getElementById('btIcon').innerText = "📡"; const btn = document.getElementById('connectBtn'); btn.style.borderColor = "#E5E5EA"; btn.style.color = "var(--primary)"; setBreathing(false); document.getElementById('uploadBtn').disabled = true; document.getElementById('controlBtn').classList.add('hidden'); document.getElementById('uploadBtn').classList.remove('hidden'); updateStatus("设备已断开", "red"); 
             document.getElementById('uploadPairBtn').disabled = true;
+            
+            // --- 新增：断开后清空 UUID 显示 ---
+            document.getElementById('uuidDisplay').innerHTML = "UUID: 设备已断开";
         }
 
         // --- 动画循环渲染引擎 ---
@@ -284,11 +301,137 @@
         }
 
         // --- 音频与状态 ---
-        function handleAudioData(e) { if (!isRecording) return; const data = new Uint8Array(e.target.value.buffer); for(let i=0; i<data.length; i++) audioChunks.push(data[i]); document.getElementById('audioStats').innerText = `已接收: ${(audioChunks.length/1024).toFixed(1)} KB`; }
-        function startLocalRecording() { isRecording = true; audioChunks = []; document.getElementById('recIndicator').classList.add('recording-active'); updateStatus("🎙️ 正在录音...", "red"); document.getElementById('playRecBtn').disabled = true; }
-        function stopLocalRecording() { isRecording = false; document.getElementById('recIndicator').classList.remove('recording-active'); updateStatus("录音完成", "green"); document.getElementById('playRecBtn').disabled = false; document.getElementById('audioStats').innerText = `就绪: ${(audioChunks.length/1024).toFixed(1)} KB`; }
-        function playLastRecording() { if (audioChunks.length === 0) return; if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); const sampleRate = 8000; const buffer = audioCtx.createBuffer(1, audioChunks.length, sampleRate); const channelData = buffer.getChannelData(0); for (let i = 0; i < audioChunks.length; i++) channelData[i] = (audioChunks[i] - 128) / 128.0; const source = audioCtx.createBufferSource(); source.buffer = buffer; source.connect(audioCtx.destination); source.start(); updateStatus("▶️ 正在播放...", "blue"); source.onended = () => updateStatus("播放结束", "black"); }
+        // --- 音频与状态 (前端防并发竞争 Bugfix) ---
+        function startLocalRecording() { 
+            if (!isRecording) {
+                isRecording = true; 
+                audioChunks = []; // 只有正常顺序下，才清空历史缓存
+            }
+            document.getElementById('recIndicator').classList.add('recording-active'); 
+            updateStatus("🎙️ 正在录音...", "red"); 
+            document.getElementById('playRecBtn').disabled = true; 
+            document.getElementById('downloadWavBtn').disabled = true; // [新增] 录音时变灰禁用
+        }
         
+        function stopLocalRecording() { 
+            isRecording = false; 
+            document.getElementById('recIndicator').classList.remove('recording-active'); 
+            updateStatus("录音完成", "green"); 
+            document.getElementById('playRecBtn').disabled = false; 
+            document.getElementById('downloadWavBtn').disabled = false; // [新增] 完成后变绿启用
+            document.getElementById('audioStats').innerText = `就绪: ${(audioChunks.length/1024).toFixed(1)} KB`; 
+        }
+
+        function handleAudioData(e) { 
+            // 【前端核心修复】如果蓝牙通道竞争导致音频包比状态包先到，强制开启录音并接住数据，绝不丢弃！
+            if (!isRecording) {
+                isRecording = true;
+                audioChunks = [];
+                document.getElementById('recIndicator').classList.add('recording-active');
+                document.getElementById('playRecBtn').disabled = true;
+                console.warn("⚠️ 检测到音频包抢跑到达，已强制开启录音状态！");
+            }
+            
+            const data = new Uint8Array(e.target.value.buffer); 
+            for(let i=0; i<data.length; i++) audioChunks.push(data[i]); 
+            document.getElementById('audioStats').innerText = `已接收: ${(audioChunks.length/1024).toFixed(1)} KB`; 
+        }
+
+        // 【新增功能】给 PCM 裸流加上标准的 44 字节 WAV 文件头，生成实体标准文件
+        function createWavBlob(pcmDataArray, sampleRate) {
+            const numChannels = 1;
+            const byteRate = sampleRate * numChannels * 2;
+            const blockAlign = numChannels * 2;
+            const dataSize = pcmDataArray.length;
+            const buffer = new ArrayBuffer(44 + dataSize);
+            const view = new DataView(buffer);
+
+            const writeString = (v, offset, str) => { for (let i = 0; i < str.length; i++) v.setUint8(offset + i, str.charCodeAt(i)); };
+
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + dataSize, true);
+            writeString(view, 8, 'WAVE');
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true); // PCM 格式
+            view.setUint16(20, 1, true);  // AudioFormat (1=PCM)
+            view.setUint16(22, numChannels, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, byteRate, true);
+            view.setUint16(32, blockAlign, true);
+            view.setUint16(34, 16, true); // 16-bit
+            writeString(view, 36, 'data');
+            view.setUint32(40, dataSize, true);
+
+            const dataView = new Uint8Array(buffer, 44);
+            dataView.set(pcmDataArray);
+
+            return new Blob([buffer], { type: 'audio/wav' });
+        }
+
+        // 【修改功能】解析 16-bit 格式播放，并在后台封装出标准的 WAV Blob
+        function playLastRecording() { 
+            if (audioChunks.length === 0) return; 
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); 
+            const sampleRate = 16000; // 与 ESP32 现配置一致
+            
+            const totalBytes = audioChunks.length;
+            const pcmBytes = new Uint8Array(totalBytes);
+            for (let i = 0; i < totalBytes; i++) pcmBytes[i] = audioChunks[i];
+
+            // 🌟 核心产物：wavBlob 就是标准格式的 WAV 音频文件！可以直接对接后续后台大模型。
+            const wavBlob = createWavBlob(pcmBytes, sampleRate);
+            console.log("✅ 成功生成标准 WAV 文件，大小: ", wavBlob.size, " bytes");
+            
+            // 将 16-bit 小端序数据转为 WebAudio 需要的 float 数据
+            const numSamples = totalBytes / 2;
+            const buffer = audioCtx.createBuffer(1, numSamples, sampleRate); 
+            const channelData = buffer.getChannelData(0); 
+            const dataView = new DataView(pcmBytes.buffer);
+            
+            for (let i = 0; i < numSamples; i++) { 
+                channelData[i] = dataView.getInt16(i * 2, true) / 32768.0; 
+            } 
+            
+            const source = audioCtx.createBufferSource(); 
+            source.buffer = buffer; 
+            source.connect(audioCtx.destination); 
+            source.start(); 
+            updateStatus("▶️ 正在播放标准高保真录音...", "blue"); 
+            source.onended = () => updateStatus("播放结束", "black"); 
+        }
+
+        // 【新增功能】一键下载标准的 WAV 文件到本地
+        function downloadLastRecording() {
+            if (audioChunks.length === 0) return;
+            const sampleRate = 16000;
+            
+            // 组装二进制缓冲
+            const totalBytes = audioChunks.length;
+            const pcmBytes = new Uint8Array(totalBytes);
+            for (let i = 0; i < totalBytes; i++) pcmBytes[i] = audioChunks[i];
+
+            // 复用前面已经写好的 createWavBlob 方法生成标准文件
+            const wavBlob = createWavBlob(pcmBytes, sampleRate);
+            
+            // 触发浏览器下载动作
+            const url = URL.createObjectURL(wavBlob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            // 文件名加上时间戳防重名
+            a.download = `robot_audio_${new Date().getTime()}.wav`; 
+            document.body.appendChild(a);
+            a.click();
+            
+            // 清理内存
+            setTimeout(() => {
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }, 100);
+            
+            updateStatus("✅ WAV 文件下载成功", "green");
+        }
+
         // --- 状态接收与智能反向同步处理 ---
         function handleStatusUpdate(e) {
             const val = e.target.value; const dec = new TextDecoder(); const str = dec.decode(val);
