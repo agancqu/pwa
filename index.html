@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>Robot Studio BLE 10.35 (Logic Closed Loop)</title>
+    <title>Robot Studio BLE 10.36 (Logic Closed Loop)</title>
     <style>
         /* --- 样式部分保持不变 --- */
         :root { --primary: #007AFF; --primary-dark: #0056b3; --success: #34C759; --success-dark: #248a3d; --danger: #FF3B30; --danger-dark: #cc2f26; --bg-color: #F2F2F7; --card-bg: #FFFFFF; --text-main: #1C1C1E; --text-sub: #8E8E93; --border-radius: 16px; }
@@ -32,7 +32,7 @@
 
     <div class="navbar px-4 py-3 mb-4">
         <div class="max-w-md flex justify-between items-center mb-2">
-            <h1 class="text-lg text-main flex items-center gap-2">🤖 Robot Studio 10.35</h1>
+            <h1 class="text-lg text-main flex items-center gap-2">🤖 Robot Studio 10.36</h1>
             <button id="connectBtn" onclick="toggleConnection()" class="btn-outline" style="width: auto; border-radius: 18px;">
                 <span id="btIcon">📡</span> <span id="btText">未连接</span>
             </button>
@@ -75,6 +75,13 @@
                     <div>
                         <div class="flex justify-between text-xs mb-1"><span>最小路径过滤 (mm)</span><span id="minLengthVal">2.5</span></div>
                         <input type="range" id="minLength" min="0" max="5" step="0.1" value="2.5">
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-xs mb-1">
+                            <span>抠图敏感度 (色块大小)</span>
+                            <span id="hollowSizeVal">16</span>
+                        </div>
+                        <input type="range" id="hollowSize" min="1" max="30" step="1" value="16">
                     </div>
                 </div>
             </details>
@@ -706,6 +713,7 @@
             document.getElementById('uploadBtn').disabled = true;
             document.getElementById('controlBtn').classList.add('hidden');
             document.getElementById('uploadBtn').classList.add('hidden');
+            document.getElementById('hollowSize').addEventListener('input', () => {}); // 这一行不用加，主要是确保函数逻辑涵盖了所有滑块
         }
 
         document.getElementById('threshold').addEventListener('input', (e) => { 
@@ -716,7 +724,11 @@
         document.getElementById('hollowSolids').addEventListener('change', () => { invalidateProcess(); });
         document.getElementById('smoothing').addEventListener('input', (e) => { document.getElementById('smoothingVal').innerText = e.target.value; invalidateProcess(); });
         document.getElementById('minLength').addEventListener('input', (e) => { document.getElementById('minLengthVal').innerText = e.target.value; invalidateProcess(); });
-
+        document.getElementById('hollowSize').addEventListener('input', (e) => { 
+            document.getElementById('hollowSizeVal').innerText = e.target.value; 
+            invalidateProcess(); 
+        });
+        
         function updateBinaryPreview() {
             if(!originalImage) return; const th = parseInt(document.getElementById('threshold').value);
             const output = imgCtx.createImageData(imgWidth, imgHeight); const d = originalImage.data; const out = output.data;
@@ -748,7 +760,9 @@
                     
                     // 2. 【核心修复】使用 7 像素探测核进行安全空心化 
                     // 线条宽度一般为 2-5 像素，7 像素探测核能 100% 保护线条不被掏空
-                    hollowLargeSolidShapesFinal(16); 
+                    // hollowLargeSolidShapesFinal(16); 
+                    const hSize = parseInt(document.getElementById('hollowSize').value);
+                    hollowLargeSolidShapesFinal(hSize);
 
                     // 3. 骨架化：实心线条会收缩为单中心线，空心眼睛会收缩为单圆圈 
                     skeletonize();
@@ -995,36 +1009,126 @@
             }
         }
 
+        /**
+        * 修复版：基于切线预测的交叉点定向闭合算法
+        * 逻辑：仅沿当前线条行进方向寻找锚点，消除畸形交叉线
+        */
         function tracePaths() {
             rawPaths = [];
-            const visited = new Int8Array(imgWidth * imgHeight);
-            const dirs = [{dx:1,dy:0}, {dx:1,dy:1}, {dx:0,dy:1}, {dx:-1,dy:1}, {dx:-1,dy:0}, {dx:-1,dy:-1}, {dx:0,dy:-1}, {dx:1,dy:-1}];
-            for (let y = 0; y < imgHeight; y++) {
-                for (let x = 0; x < imgWidth; x++) {
-                    const idx = y * imgWidth + x;
-                    if (binaryData[idx] && !visited[idx]) {
-                        let path = []; let cx = x, cy = y; path.push({x: cx, y: cy}); visited[cy * imgWidth + cx] = 1;
+            const w = imgWidth;
+            const h = imgHeight;
+            const visited = new Int8Array(w * h);
+            const skeletonData = binaryData; 
+
+            const dirs = [
+                {dx:1, dy:0}, {dx:1, dy:1}, {dx:0, dy:1}, {dx:-1, dy:1},
+                {dx:-1, dy:0}, {dx:-1, dy:-1}, {dx:0, dy:-1}, {dx:1, dy:-1}
+            ];
+
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    const idx = y * w + x;
+                    if (skeletonData[idx] && !visited[idx]) {
+                        let path = [];
+                        let cx = x, cy = y;
+                        path.push({x: cx, y: cy});
+                        visited[cy * w + cx] = 1;
+
+                        // 1. 向前追踪
                         while (true) {
-                            let found = -1;
-                            for (let i = 0; i < 8; i++) {
-                                const nx = cx + dirs[i].dx, ny = cy + dirs[i].dy;
-                                if (nx >= 0 && nx < imgWidth && ny >= 0 && ny < imgHeight) { const nIdx = ny * imgWidth + nx; if (binaryData[nIdx] && !visited[nIdx]) { found = i; break; } }
+                            let next = findNextPixel(cx, cy, visited, dirs);
+                            if (next) {
+                                cx = next.x; cy = next.y;
+                                path.push({x: cx, y: cy});
+                                visited[cy * w + cx] = 1;
+                            } else {
+                                // 【核心修复】定向吸附：沿切线方向寻找交叉点
+                                let anchor = findDirectionalAnchor(path, 2);
+                                if (anchor) path.push(anchor);
+                                break;
                             }
-                            if (found !== -1) { cx += dirs[found].dx; cy += dirs[found].dy; path.push({x: cx, y: cy}); visited[cy * imgWidth + cx] = 1; } else break;
                         }
+
+                        // 2. 向后回溯
                         let bx = x, by = y;
-                        while(true) {
-                             let found = -1;
-                            for (let i = 0; i < 8; i++) {
-                                const nx = bx + dirs[i].dx, ny = by + dirs[i].dy;
-                                if (nx >= 0 && nx < imgWidth && ny >= 0 && ny < imgHeight) { const nIdx = ny * imgWidth + nx; if (binaryData[nIdx] && !visited[nIdx]) { found = i; break; } }
+                        while (true) {
+                            let next = findNextPixel(bx, by, visited, dirs);
+                            if (next) {
+                                bx = next.x; by = next.y;
+                                path.unshift({x: bx, y: by});
+                                visited[by * w + bx] = 1;
+                            } else {
+                                // 【核心修复】定向吸附：沿反向切线寻找交叉点
+                                let anchor = findDirectionalAnchor(path, 2, true);
+                                if (anchor) path.unshift(anchor);
+                                break;
                             }
-                            if (found !== -1) { bx += dirs[found].dx; by += dirs[found].dy; path.unshift({x: bx, y: by}); visited[by * imgWidth + bx] = 1; } else break;
                         }
-                        if (path.length > 2) rawPaths.push(path);
+
+                        if (path.length >= 2) rawPaths.push(path);
                     }
                 }
             }
+
+            /**
+            * 惯性延伸锚点算法
+            * 逻辑：模拟红线效果，让线条顺着惯性“扎进”交叉线，而不是在边缘停止
+            */
+            function findDirectionalAnchor(p, range, reverse = false) {
+                if (p.length < 3) return null; 
+                
+                // 1. 采样末端向量（采样3个点以获得稳健的方向趋势）
+                const pEnd = reverse ? p[0] : p[p.length - 1];
+                const pMid = reverse ? p[1] : p[p.length - 2];
+                const pFar = reverse ? p[2] : p[p.length - 3];
+                
+                // 计算平滑后的切线向量
+                const dx = (pEnd.x - pMid.x) * 0.7 + (pMid.x - pFar.x) * 0.3;
+                const dy = (pEnd.y - pMid.y) * 0.7 + (pMid.y - pFar.y) * 0.3;
+                const mag = Math.sqrt(dx * dx + dy * dy);
+                if (mag === 0) return null;
+                
+                const ux = dx / mag; // 单位向量
+                const uy = dy / mag;
+
+                // 2. 扇形多重深度探测
+                // 模拟红线效果：沿着切线方向 ±15 度，向深处探测 3 像素
+                const angles = [0, -0.26, 0.26]; 
+                for (let r = 1; r <= range + 1.5; r += 0.5) { // 增加搜索深度
+                    for (let a of angles) {
+                        const cosA = Math.cos(a);
+                        const sinA = Math.sin(a);
+                        const rx = ux * cosA - uy * sinA;
+                        const ry = ux * sinA + uy * cosA;
+                        
+                        const nx = Math.round(pEnd.x + rx * r);
+                        const ny = Math.round(pEnd.y + ry * r);
+                        
+                        if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                            const nIdx = ny * w + nx;
+                            // 关键点：寻找任何存在的骨架点（哪怕已访问），强行产生坐标重叠
+                            if (skeletonData[nIdx]) {
+                                return {x: nx, y: ny};
+                            }
+                        }
+                    }
+                }
+                return null;
+            }
+        }
+
+        /**
+        * 基础寻点函数保持不变
+        */
+        function findNextPixel(x, y, visited, dirs) {
+            for (let d of dirs) {
+                let nx = x + d.dx, ny = y + d.dy;
+                if (nx >= 0 && nx < imgWidth && ny >= 0 && ny < imgHeight) {
+                    let nIdx = ny * imgWidth + nx;
+                    if (binaryData[nIdx] && !visited[nIdx]) return {x: nx, y: ny};
+                }
+            }
+            return null;
         }
 
         function sortAndMergePaths(paths) {
