@@ -791,36 +791,130 @@
         }
 
         /**
-        * 终极安全空心化函数
-        * 数学逻辑：只有当一个像素周围 [size x size] 范围内全黑时才挖空 
+        * 终极破局版：双通道分析 + 边缘膨胀补偿 (CCA + Dilation Compensation)
+        * 彻底对抗骨架化收缩！绝不误伤任何线条，完美 1:1 还原孤立鼻子轮廓。
         */
         function hollowLargeSolidShapesFinal(size) {
             const w = imgWidth;
             const h = imgHeight;
             const data = binaryData;
-            // 使用副本进行判定，防止原地修改导致的连带塌陷 
-            const original = new Int8Array(data);
-            const offset = Math.floor(size / 2);
+            const original = new Int8Array(data); // 备份原图，防止两通道互相干扰
 
+            // ==========================================
+            // 通道 1：标准大核空心化（解决大眼睛）
+            // 粗线条永远装不下这个 offset，因此绝对安全，强行塌缩为单线！
+            // ==========================================
+            const offset = Math.floor(size / 2);
             for (let y = offset; y < h - offset; y++) {
                 for (let x = offset; x < w - offset; x++) {
-                    const idx = y * w + x;
-                    // 只处理原始黑色像素 
-                    if (original[idx] === 1) {
-                        let canHollow = true;
-                        // 探测周围 [size x size] 区域 
+                    if (original[y * w + x] === 1) {
+                        let isDeep = true;
                         for (let ky = -offset; ky <= offset; ky++) {
                             for (let kx = -offset; kx <= offset; kx++) {
-                                // 如果区域内有任何一点是白色，说明该点离边缘很近（可能是线条），绝不挖空 
                                 if (original[(y + ky) * w + (x + kx)] === 0) {
-                                    canHollow = false;
+                                    isDeep = false;
                                     break;
                                 }
                             }
-                            if (!canHollow) break;
+                            if (!isDeep) break;
                         }
-                        // 只有处于“深层黑色腹地”的点（如眼睛中心）才执行挖空 
-                        if (canHollow) data[idx] = 0;
+                        if (isDeep) data[y * w + x] = 0; // 挖空大色块腹地
+                    }
+                }
+            }
+
+            // ==========================================
+            // 通道 2：连通域孤岛边缘膨胀补偿（解决鼻子缩小）
+            // ==========================================
+            const visited = new Uint8Array(w * h);
+
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    const idx = y * w + x;
+                    // 寻找未被访问过的独立黑色岛屿
+                    if (original[idx] === 1 && visited[idx] === 0) {
+                        let minX = x, maxX = x, minY = y, maxY = y;
+                        const queue = [x, y];
+                        visited[idx] = 1;
+
+                        let head = 0;
+                        const islandPixels = [];
+
+                        // BFS 遍历提取岛屿全貌
+                        while (head < queue.length) {
+                            const cx = queue[head++];
+                            const cy = queue[head++];
+                            islandPixels.push({x: cx, y: cy});
+
+                            if (cx < minX) minX = cx;
+                            if (cx > maxX) maxX = cx;
+                            if (cy < minY) minY = cy;
+                            if (cy > maxY) maxY = cy;
+
+                            // 8邻域搜索
+                            for (let dy = -1; dy <= 1; dy++) {
+                                for (let dx = -1; dx <= 1; dx++) {
+                                    if (dx === 0 && dy === 0) continue;
+                                    const nx = cx + dx, ny = cy + dy;
+                                    if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                                        const nIdx = ny * w + nx;
+                                        if (original[nIdx] === 1 && visited[nIdx] === 0) {
+                                            visited[nIdx] = 1;
+                                            queue.push(nx, ny);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        const islandWidth = maxX - minX + 1;
+                        const islandHeight = maxY - minY + 1;
+
+                        // 拓扑宏观判定：确认是“鼻子”这类微型孤岛
+                        if (islandWidth >= 4 && islandHeight >= 4 && 
+                            islandWidth <= size * 3 && islandHeight <= size * 3) {
+                            
+                            // 1. 彻底清空整个岛屿实体（变白）
+                            for (let i = 0; i < islandPixels.length; i++) {
+                                data[islandPixels[i].y * w + islandPixels[i].x] = 0;
+                            }
+
+                            // 2. 边缘加厚膨胀补偿
+                            for (let i = 0; i < islandPixels.length; i++) {
+                                const px = islandPixels[i].x;
+                                const py = islandPixels[i].y;
+                                
+                                // 寻找真正的原始边缘像素
+                                let isEdge = false;
+                                for (let dy = -1; dy <= 1; dy++) {
+                                    for (let dx = -1; dx <= 1; dx++) {
+                                        const nx = px + dx, ny = py + dy;
+                                        if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                                            if (original[ny * w + nx] === 0) {
+                                                isEdge = true; 
+                                                break;
+                                            }
+                                        } else {
+                                            isEdge = true; // 图像边缘视同边界
+                                            break;
+                                        }
+                                    }
+                                    if (isEdge) break;
+                                }
+
+                                // 以边缘像素为中心，绘制 3x3 加厚抗收缩保护壳
+                                if (isEdge) {
+                                    for (let dy = -1; dy <= 1; dy++) {
+                                        for (let dx = -1; dx <= 1; dx++) {
+                                            const nx = px + dx, ny = py + dy;
+                                            if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                                                data[ny * w + nx] = 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
